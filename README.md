@@ -1,5 +1,7 @@
 # <name>
 
+![CI](https://github.com/sherrer08/http-server/actions/workflows/ci.yml/badge.svg)
+
 An HTTP/1.1 web server written from scratch in C, using only the standard library and Linux system calls. Built to learn sockets, HTTP parsing, and concurrency at the systems level.
 
 ## Status
