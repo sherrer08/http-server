@@ -40,6 +40,8 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    printf("listening on port %d\n", port);
+
     server_run(listen_fd);
 
     /* listen_fd should be closed once server_run can return */
