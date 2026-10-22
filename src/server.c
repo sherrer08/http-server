@@ -4,6 +4,8 @@
 #include <netinet/in.h>
 #include <unistd.h>
 #include <string.h>
+#include <arpa/inet.h>
+
 #define LISTEN_BACKLOG 16
 
 int server_listen(int port) {
@@ -52,7 +54,28 @@ int server_listen(int port) {
     return fd;
 }
 
+static void handle_client(int client_fd) {
+    close(client_fd);
+}
+
 void server_run(int listen_fd) {
-    printf("server_run: would serve clients on fd %d\n", listen_fd);
-    pause();
+    struct sockaddr_in client_addr;
+
+    for (;;) {
+        socklen_t addrlen = sizeof(client_addr);
+        int client_fd = accept(listen_fd, (struct sockaddr *)&client_addr, &addrlen);
+
+        if (client_fd == -1) {
+            perror("accept");
+            continue;
+        }
+
+        char ip[INET_ADDRSTRLEN];
+
+        inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
+
+        printf("connection from %s:%d\n", ip, ntohs(client_addr.sin_port));
+
+        handle_client(client_fd);
+    }
 }
