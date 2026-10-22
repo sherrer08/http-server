@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 
 #define LISTEN_BACKLOG 16
+#define REQUEST_BUF_SIZE 4096
 
 int server_listen(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -55,6 +56,22 @@ int server_listen(int port) {
 }
 
 static void handle_client(int client_fd) {
+    /* M1 simplification: assumes the whole request arrives in one recv.
+       M2 will read until the end of the headers. */
+    char buf[REQUEST_BUF_SIZE];
+    ssize_t n = recv(client_fd, buf, sizeof(buf) -1, 0);
+
+    if (n > 0) {
+        buf[n] = '\0';
+        
+        printf("received %zd bytes:\n%s", n, buf);
+        fflush(stdout);
+    } else if (n == 0) {
+        printf("client closed without sending\n");
+    } else {
+        perror("recv");
+    }
+
     close(client_fd);
 }
 
