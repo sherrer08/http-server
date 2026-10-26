@@ -6,7 +6,7 @@ An HTTP/1.1 web server written from scratch in C, using only the standard librar
 
 ## Status
 
-**Work in progress.** The build system, test suite, and sanitizer checks are in place. The server itself is being built next, starting with a basic socket listener.
+**Work in progress.** The build system, test suite, and sanitizer checks are in place. Responds to HTTP requests with a fixed plain-text response.
 
 ## Requirements
 
