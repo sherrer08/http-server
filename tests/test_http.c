@@ -16,17 +16,20 @@ static int checks_failed = 0;
         }                                                           \
     } while (0)
 
-static enum http_parse_result parse(const char *text, char *buf, size_t buf_size, struct http_request *req) {
-    size_t len = strlen(text);
-
+static enum http_parse_result parse_len(const char *text, size_t len, char *buf, size_t buf_size, struct http_request *req) {
     if (len + 1 > buf_size) {
         fprintf(stderr, "test bug: request text does not fit in buffer\n");
         return HTTP_PARSE_BAD_REQUEST;
     }
 
-    memcpy(buf, text, len + 1);
+    memcpy(buf, text, len);
+    buf[len] = '\0';
 
     return http_parse_request(buf, len, req);
+}
+
+static enum http_parse_result parse(const char *text, char *buf, size_t buf_size, struct http_request *req) {
+    return parse_len(text, strlen(text), buf, buf_size, req);
 }
 
 static void test_minimal_request(void) {
@@ -76,10 +79,31 @@ static void test_header_lookup(void) {
 
 }
 
+static void test_input_checks(void) {
+    char buf[1024];
+    struct http_request req;
+    enum http_parse_result result;
+
+    static const char text[] = "GET / HTTP/1.1\r\nHost: x\0y\r\n\r\n";
+
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    result = parse("", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    result = parse("\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    result = parse_len(text, sizeof(text) - 1, buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
     test_header_lookup();
+    test_input_checks();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 

@@ -1,9 +1,15 @@
 #include "http.h"
+#include <string.h>
 
 enum http_parse_result http_parse_request(char *buf, size_t len, struct http_request *req) {
-    (void)buf;
-    (void)len;
-    (void)req;
+    memset(req, 0, sizeof(*req));
+    
+    if (len < 4 || memcmp(buf + len - 4, "\r\n\r\n", 4) != 0) {
+        return HTTP_PARSE_BAD_REQUEST;
+    } else if (memchr(buf, '\0', len) != NULL) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
     return HTTP_PARSE_BAD_REQUEST;
 }
 
