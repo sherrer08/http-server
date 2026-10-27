@@ -97,6 +97,12 @@ static void test_input_checks(void) {
 
     result = parse_len(text, sizeof(text) - 1, buf, sizeof(buf), &req);
     CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    result = parse("\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    result = parse("\r\nGET / HTTP1.1\r\nHost: x\r\n\r\n", buf, sizeof(buf), & req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
 }
 
 int main(void) {
