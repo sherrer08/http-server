@@ -16,16 +16,18 @@ LIB_OBJS = $(filter-out build/main.o, $(OBJS))
 
 LIB_SRCS = $(filter-out src/main.c, $(SRCS))
 
-TEST_OBJS = build/test_util.o
+TEST_NAME = test_http
+
+TEST_OBJS = build/$(TEST_NAME).o
 
 .PHONY: all clean run test test-asan
 
-all: build/server build/test_util
+all: build/server build/$(TEST_NAME)
 
 build/server: $(OBJS)
 	$(CC) $(LDFLAGS) $^ -o $@
 
-build/test_util: build/test_util.o $(LIB_OBJS)
+build/$(TEST_NAME): build/$(TEST_NAME).o $(LIB_OBJS)
 	$(CC) $(LDFLAGS) $^ -o $@
 
 build/%.o: src/%.c
@@ -42,13 +44,13 @@ clean:
 run: build/server
 	./build/server
 
-test: build/test_util
-	./build/test_util
+test: build/$(TEST_NAME)
+	./build/$(TEST_NAME)
 
 test-asan: 
 	@mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) tests/test_util.c $(LIB_SRCS) $(LDFLAGS) -o build/test_util_asan
-	./build/test_util_asan
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) tests/$(TEST_NAME).c $(LIB_SRCS) $(LDFLAGS) -o build/$(TEST_NAME)_asan
+	./build/$(TEST_NAME)_asan
 
 -include $(OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
