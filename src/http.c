@@ -195,6 +195,28 @@ static enum http_parse_result parse_request_line(char *line, struct http_request
     return HTTP_PARSE_OK;
 }
 
+static enum http_parse_result check_request(struct http_request *req) {
+    size_t host_count = 0;
+
+    for (size_t i = 0; i < req->header_count; i++) {
+        const char *name = req->headers[i].name;
+
+        if (strcasecmp(name, "Host") == 0) {
+            host_count++;
+        }
+    }
+
+    if (host_count > 1) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (host_count == 0 && req->version_minor == 1) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    return HTTP_PARSE_OK;
+}
+
 enum http_parse_result http_parse_request(char *buf, size_t len, struct http_request *req) {
     memset(req, 0, sizeof(*req));
     
@@ -220,6 +242,11 @@ enum http_parse_result http_parse_request(char *buf, size_t len, struct http_req
     }
 
     result = parse_headers(headers, buf + len, req);
+    if (result != HTTP_PARSE_OK) {
+        return result;
+    }
+
+    result = check_request(req);
     if (result != HTTP_PARSE_OK) {
         return result;
     }

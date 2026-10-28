@@ -43,7 +43,10 @@ struct http_request {
     const char *target;         // request target, e.g. "/index.html"
     int version_minor;          // 0 for HTTP/1.0, 1 for HTTP/1.1
     struct http_header headers[HTTP_MAX_HEADERS];
-    size_t header_count;        // number of valid entries in headers 
+    size_t header_count;        // number of valid entries in headers
+    int has_content_length;     // 1 if a Content-Length header was present
+    size_t content_length;      // its value, if present
+    int has_transfer_encoding;  // 1 if a Transfer-Encoding header was present
 };
 
 /*
@@ -54,7 +57,8 @@ struct http_request {
  * The parser writes '\0' bytes into buf to terminate each field.
  * On HTTP_PARSE_OK, *req is filled in with pointers into buf: it is valid only
  * while buf exists and is not modified. On any other result, *req must not be
- * used. Does no I/O.
+ * used. Rejects requests breaking the Host, Content-Length, and Transfer-Encoding
+ * rules. Does no I/O.
  */
 enum http_parse_result http_parse_request(char *buf, size_t len, struct http_request *req);
 

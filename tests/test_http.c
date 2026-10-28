@@ -341,7 +341,7 @@ static void test_headers(void) {
         CHECK(strcmp(req.headers[2].value, "*/*") == 0);
     }
 
-    result = parse("GET / HTTP/1.1\r\nX-Empty:\r\n\r\n", buf, sizeof(buf), &req);
+    result = parse("GET / HTTP/1.0\r\nX-Empty:\r\n\r\n", buf, sizeof(buf), &req);
     CHECK(result == HTTP_PARSE_OK);
     if (result == HTTP_PARSE_OK && req.header_count == 1) {
         CHECK(strcmp(req.headers[0].value, "") == 0);
@@ -380,7 +380,7 @@ static void test_header_names(void) {
         struct http_request req;
         enum http_parse_result result;
 
-        snprintf(text, sizeof(text), "GET / HTTP/1.1\r\n%s\r\n\r\n", cases[i].line);
+        snprintf(text, sizeof(text), "GET / HTTP/1.0\r\n%s\r\n\r\n", cases[i].line);
 
         result = parse(text, buf, sizeof(buf), &req);
         CHECK(result == cases[i].expected);
@@ -424,7 +424,7 @@ static void test_header_values(void) {
         struct http_request req;
         enum http_parse_result result;
 
-        snprintf(text, sizeof(text), "GET / HTTP/1.1\r\n%s\r\n\r\n", cases[i].line);
+        snprintf(text, sizeof(text), "GET / HTTP/1.0\r\n%s\r\n\r\n", cases[i].line);
 
         result = parse(text, buf, sizeof(buf), &req);
         CHECK(result == HTTP_PARSE_OK);
@@ -469,7 +469,7 @@ static void test_header_value_chars(void) {
         struct http_request req;
         enum http_parse_result result;
 
-        snprintf(text, sizeof(text), "GET / HTTP/1.1\r\n%s\r\n\r\n", cases[i].line);
+        snprintf(text, sizeof(text), "GET / HTTP/1.0\r\n%s\r\n\r\n", cases[i].line);
 
         result = parse(text, buf, sizeof(buf), &req);
         CHECK(result == cases[i].expected);
@@ -483,7 +483,7 @@ static void test_header_value_chars(void) {
 static void build_headers(char *text, size_t size, size_t n) {
     size_t pos = 0;
 
-    pos += (size_t)snprintf(text + pos, size - pos, "GET / HTTP/1.1\r\n");
+    pos += (size_t)snprintf(text + pos, size - pos, "GET / HTTP/1.0\r\n");
     for (size_t i = 0; i < n; i ++) {
         pos += (size_t)snprintf(text + pos, size - pos, "X-%zu: v\r\n", i);
     }
@@ -540,7 +540,7 @@ static void test_header_lookup_cases(void) {
     }
 
     /* --- duplicates: the first one wins --- */
-    result = parse("GET / HTTP/1.1\r\n"
+    result = parse("GET / HTTP/1.0\r\n"
                    "X-A: first\r\n"
                    "X-A: second\r\n"
                    "\r\n",
@@ -578,6 +578,37 @@ static void test_header_lookup_cases(void) {
     }
 }
 
+static void test_request_rules(void) {
+    static const struct {
+        const char *text;
+        enum http_parse_result expected;
+    } cases[] = {
+        { "GET / HTTP/1.1\r\nHost: x\r\n\r\n",                HTTP_PARSE_OK },
+        { "GET / HTTP/1.1\r\n\r\n",                           HTTP_PARSE_BAD_REQUEST },
+        { "GET / HTTP/1.1\r\nHost: a\r\nHost: b\r\n\r\n",     HTTP_PARSE_BAD_REQUEST },
+        { "GET / HTTP/1.1\r\nHost: a\r\nhost: b\r\n\r\n",     HTTP_PARSE_BAD_REQUEST },
+        { "GET / HTTP/1.1\r\nHost:\r\n\r\n",                  HTTP_PARSE_OK },
+        { "GET / HTTP/1.1\r\nX-A: v\r\n\r\n",                 HTTP_PARSE_BAD_REQUEST },
+        { "GET / HTTP/1.0\r\n\r\n",                           HTTP_PARSE_OK },
+        { "GET / HTTP/1.0\r\nHost: x\r\n\r\n",                HTTP_PARSE_OK },
+        { "GET / HTTP/1.0\r\nHost: a\r\nHost: b\r\n\r\n",     HTTP_PARSE_BAD_REQUEST },
+    };
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        char buf[1024];
+        struct http_request req;
+        enum http_parse_result result;
+
+        result = parse(cases[i].text, buf, sizeof(buf), &req);
+        CHECK(result == cases[i].expected);
+
+        if (result != cases[i].expected) {
+            fprintf(stderr, " (case %zu)\n", i);
+        }
+    }
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -592,6 +623,7 @@ int main(void) {
     test_header_value_chars();
     test_header_limit();
     test_header_lookup_cases();
+    test_request_rules();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 
