@@ -245,6 +245,64 @@ static void test_targets(void) {
     CHECK(result == HTTP_PARSE_URI_TOO_LONG);
 }
 
+static void test_versions(void) {
+    static const struct {
+        const char *version;
+        enum http_parse_result expected;
+        int minor;
+    } cases[] = {
+        { "HTTP/1.1",  HTTP_PARSE_OK, 1 },
+        { "HTTP/1.0",  HTTP_PARSE_OK, 0 },
+        /* 505: well-formed, unsupported */
+        { "HTTP/2.0",  HTTP_PARSE_VERSION_NOT_SUPPORTED, 0 },
+        { "HTTP/1.2",  HTTP_PARSE_VERSION_NOT_SUPPORTED, 0 },
+        { "HTTP/0.9",  HTTP_PARSE_VERSION_NOT_SUPPORTED, 0 },
+        { "HTTP/9.9",  HTTP_PARSE_VERSION_NOT_SUPPORTED, 0 },
+        /* 400: not a valid version */
+        { "http/1.1",  HTTP_PARSE_BAD_REQUEST, 0 },
+        { "HTTPS/1.1", HTTP_PARSE_BAD_REQUEST, 0 },
+        { "HTTP/1.10", HTTP_PARSE_BAD_REQUEST, 0 },
+        { "HTTP/1",    HTTP_PARSE_BAD_REQUEST, 0 },
+        { "HTTP/11",   HTTP_PARSE_BAD_REQUEST, 0 },
+        { "HTTP/a.b",  HTTP_PARSE_BAD_REQUEST, 0 },
+        { "HTTP/1.1x", HTTP_PARSE_BAD_REQUEST, 0 },
+    };
+
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        char text[256];
+        char buf[1024];
+        struct http_request req;
+        enum http_parse_result result;
+
+        snprintf(text, sizeof(text), "GET / %s\r\nHost: x\r\n\r\n", cases[i].version);
+
+        result = parse(text, buf, sizeof(buf), &req);
+        CHECK(result == cases[i].expected);
+
+        if (result == HTTP_PARSE_OK && cases[i].expected == HTTP_PARSE_OK) {
+            CHECK(req.version_minor == cases[i].minor);
+        }
+
+        if (result != cases[i].expected) {
+            fprintf(stderr, " (version was \"%s\")\n", cases[i].version);
+        }
+    }
+
+    char buf[1024];
+    struct http_request req;
+    enum http_parse_result result;
+
+    /* a third space puts "HTTP/1.1 x in the version" */
+    result = parse("GET / HTTP1.1 x\r\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    /* a bare \n makes the request line run into the next line */
+    result = parse("GET / HTTP/1.1\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -252,6 +310,7 @@ int main(void) {
     test_input_checks();
     test_methods();
     test_targets();
+    test_versions();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 

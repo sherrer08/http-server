@@ -7,6 +7,10 @@ static const char TOKEN_CHARS[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
     "abcdefghijklmnopqrstuvwxyz";
 
+static int is_digit(char c) {
+    return c >= '0' && c <= '9';
+}
+
 static enum http_method method_from_string(const char *s) {
     static const struct {
         const char *name;
@@ -53,6 +57,24 @@ static enum http_parse_result check_target(const char *target) {
     return HTTP_PARSE_OK;
 }
 
+static enum http_parse_result parse_version(const char *version, struct http_request *req) {
+    if (strcmp(version, "HTTP/1.1") == 0) {
+        req->version_minor = 1;
+        return HTTP_PARSE_OK;
+    }
+    
+    if (strcmp(version, "HTTP/1.0") == 0) {
+        req->version_minor = 0;
+        return HTTP_PARSE_OK;
+    }
+
+    if (strlen(version) == 8 && strncmp(version, "HTTP/", 5) == 0 && is_digit(version[5]) && version[6] == '.' && is_digit(version[7])) {
+        return HTTP_PARSE_VERSION_NOT_SUPPORTED;
+    } else {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+}
+
 static enum http_parse_result parse_request_line(char *line, struct http_request *req) {
     char *sp1 = strchr(line, ' ');
 
@@ -85,6 +107,11 @@ static enum http_parse_result parse_request_line(char *line, struct http_request
     req->method = method_from_string(line);
 
     enum http_parse_result result = check_target(target);
+    if (result != HTTP_PARSE_OK) {
+        return result;
+    }
+
+    result = parse_version(version, req);
     if (result != HTTP_PARSE_OK) {
         return result;
     }
