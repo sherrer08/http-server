@@ -348,6 +348,56 @@ static void test_headers(void) {
     }
 }
 
+static void test_header_names(void) {
+    static const struct {
+        const char *line;
+        enum http_parse_result expected;
+    } cases[] = {
+        /* valid */
+        { "X-Custom-Header: v", HTTP_PARSE_OK },
+        { "x-lowercase: v",     HTTP_PARSE_OK },
+        { "A: v",               HTTP_PARSE_OK },
+        { "X_Under.Dot~: v",    HTTP_PARSE_OK },
+        { "!#$%&'*+-.^_`|~: v", HTTP_PARSE_OK },
+        /* invalid */
+        { ": v",                HTTP_PARSE_BAD_REQUEST },
+        { "Host : v",           HTTP_PARSE_BAD_REQUEST },
+        { "Host\t: v",          HTTP_PARSE_BAD_REQUEST },
+        { " Host: v",           HTTP_PARSE_BAD_REQUEST },
+        { "\tHost: v",          HTTP_PARSE_BAD_REQUEST },
+        { "Ho st: v",           HTTP_PARSE_BAD_REQUEST },
+        { "Ho(st: v",           HTTP_PARSE_BAD_REQUEST },
+        { "Ho/st: v",           HTTP_PARSE_BAD_REQUEST },
+        { "Ho\"st: v",          HTTP_PARSE_BAD_REQUEST },
+        { "Ho\xc3\xa9st: v",    HTTP_PARSE_BAD_REQUEST },
+    };
+
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        char text[256];
+        char buf[1024];
+        struct http_request req;
+        enum http_parse_result result;
+
+        snprintf(text, sizeof(text), "GET / HTTP/1.1\r\n%s\r\n\r\n", cases[i].line);
+
+        result = parse(text, buf, sizeof(buf), &req);
+        CHECK(result == cases[i].expected);
+
+        if (result != cases[i].expected) {
+            fprintf(stderr, " (line was \"%s\")\n", cases[i].line);
+        }
+    }
+
+    char buf[1024];
+    struct http_request req;
+    enum http_parse_result result;
+
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\n more: stuff\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -357,6 +407,7 @@ int main(void) {
     test_targets();
     test_versions();
     test_headers();
+    test_header_names();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 

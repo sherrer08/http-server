@@ -69,6 +69,14 @@ static enum http_parse_result parse_header_line(char *line, struct http_request 
 
     *colon = '\0';
 
+    if (line[0] == '\0') {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (strspn(line, TOKEN_CHARS) != strlen(line)) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
     char *value = colon + 1;
 
     req->headers[req->header_count].name = line;
