@@ -508,6 +508,76 @@ static void test_header_limit(void) {
     CHECK(result == HTTP_PARSE_TOO_MANY_HEADERS);
 }
 
+static void test_header_lookup_cases(void) {
+    char buf[1024];
+    struct http_request req;
+    enum http_parse_result result;
+    const char *v;
+
+    /* --- different capitalization of the same name */
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+
+    if (result == HTTP_PARSE_OK) {
+        static const char *names[] = { "Host", "host", "HOST", "hOsT" };
+        const size_t count = sizeof(names) / sizeof(names[0]);
+
+        for (size_t i = 0; i < count; i++) {
+            v = http_get_header(&req, names[i]);
+            CHECK(v != NULL);
+            if (v != NULL) {
+                CHECK(strcmp(v, "x") == 0);
+            } else {
+                fprintf(stderr, " (looked up \"%s\")\n", names[i]);
+            }
+        }
+
+        /* --- names that are close, but not the same --- */
+        CHECK(http_get_header(&req, "Hos") == NULL);
+        CHECK(http_get_header(&req, "Hostx") == NULL);
+        CHECK(http_get_header(&req, "X-Host") == NULL);
+        CHECK(http_get_header(&req, "") == NULL);
+    }
+
+    /* --- duplicates: the first one wins --- */
+    result = parse("GET / HTTP/1.1\r\n"
+                   "X-A: first\r\n"
+                   "X-A: second\r\n"
+                   "\r\n",
+                   buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    if (result == HTTP_PARSE_OK) {
+        v = http_get_header(&req, "X-A");
+        CHECK(v != NULL);
+        if (v != NULL) {
+            CHECK(strcmp(v, "first") == 0);
+        }
+    }
+    
+    /* --- a header that isn't first --- */
+    result = parse("GET / HTTP/1.1\r\n"
+                   "Host: localhost:8080\r\n"
+                   "User-Agent: curl/8.5.0\r\n"
+                   "Accept: */*\r\n"
+                   "\r\n",
+                   buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    if (result == HTTP_PARSE_OK) {
+        v = http_get_header(&req, "accept");
+        CHECK(v != NULL);
+        if (v != NULL) {
+            CHECK(strcmp(v, "*/*") == 0);
+        }
+    }
+
+    /* --- no headers at all */
+    result = parse("GET / HTTP/1.0\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    if (result == HTTP_PARSE_OK) {
+        CHECK(http_get_header(&req, "Host") == NULL);
+    }
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -521,6 +591,7 @@ int main(void) {
     test_header_values();
     test_header_value_chars();
     test_header_limit();
+    test_header_lookup_cases();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 

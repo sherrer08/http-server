@@ -1,5 +1,6 @@
 #include "http.h"
 #include <string.h>
+#include <strings.h>
 
 static const char TOKEN_CHARS[] =
     "!#$%&'*+-.^_`|~"
@@ -227,7 +228,10 @@ enum http_parse_result http_parse_request(char *buf, size_t len, struct http_req
 }
 
 const char *http_get_header(const struct http_request *req, const char *name) {
-    (void)req;
-    (void)name;
+    for (size_t i = 0; i < req->header_count; i++) {
+        if (strcasecmp(req->headers[i].name, name) == 0) {
+            return req->headers[i].value;
+        }
+    }
     return NULL;
 }
