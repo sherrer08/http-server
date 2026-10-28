@@ -11,6 +11,10 @@ static int is_digit(char c) {
     return c >= '0' && c <= '9';
 }
 
+static int is_value_char(unsigned char c) {
+    return c == '\t' || (c >= ' ' && c != 127);
+}
+
 static enum http_method method_from_string(const char *s) {
     static const struct {
         const char *name;
@@ -88,6 +92,12 @@ static enum http_parse_result parse_header_line(char *line, struct http_request 
         v_end--;
     }
     *v_end = '\0';
+
+    for (size_t i = 0; value[i] != '\0'; i++) {
+        if (!is_value_char((unsigned char)value[i])) {
+            return HTTP_PARSE_BAD_REQUEST;
+        }
+    }
 
     req->headers[req->header_count].name = line;
     req->headers[req->header_count].value = value;

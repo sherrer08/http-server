@@ -441,6 +441,45 @@ static void test_header_values(void) {
     }
 }
 
+static void test_header_value_chars(void) {
+    static const struct {
+        const char *line;
+        enum http_parse_result expected;
+    } cases[] = {
+        /* valid */
+        { "X-A: hello world",               HTTP_PARSE_OK },
+        { "X-A: a\tb",                      HTTP_PARSE_OK },
+        { "X-A: !\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~", HTTP_PARSE_OK },
+        { "X-A: caf\xc3\xa9",               HTTP_PARSE_OK },
+        { "X-A: \x80\xff",                  HTTP_PARSE_OK },
+        /* invalid */
+        { "X-A: a\x01" "b",                 HTTP_PARSE_BAD_REQUEST },
+        { "X-A: a\x1f" "b",                 HTTP_PARSE_BAD_REQUEST },
+        { "X-A: a\x7f",                     HTTP_PARSE_BAD_REQUEST },
+        { "X-A: a\rb",                      HTTP_PARSE_BAD_REQUEST },
+        { "X-A: a\nb",                      HTTP_PARSE_BAD_REQUEST },
+        { "X-A: a\x0b" "b",                 HTTP_PARSE_BAD_REQUEST },
+    };
+
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        char text[256];
+        char buf[1024];
+        struct http_request req;
+        enum http_parse_result result;
+
+        snprintf(text, sizeof(text), "GET / HTTP/1.1\r\n%s\r\n\r\n", cases[i].line);
+
+        result = parse(text, buf, sizeof(buf), &req);
+        CHECK(result = cases[i].expected);
+
+        if (result != cases[i].expected) {
+            fprintf(stderr, " (line was \"%s\")\n", cases[i].line);
+        }
+    }
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -452,6 +491,7 @@ int main(void) {
     test_headers();
     test_header_names();
     test_header_values();
+    test_header_value_chars();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 
