@@ -472,12 +472,40 @@ static void test_header_value_chars(void) {
         snprintf(text, sizeof(text), "GET / HTTP/1.1\r\n%s\r\n\r\n", cases[i].line);
 
         result = parse(text, buf, sizeof(buf), &req);
-        CHECK(result = cases[i].expected);
+        CHECK(result == cases[i].expected);
 
         if (result != cases[i].expected) {
             fprintf(stderr, " (line was \"%s\")\n", cases[i].line);
         }
     }
+}
+
+static void build_headers(char *text, size_t size, size_t n) {
+    size_t pos = 0;
+
+    pos += (size_t)snprintf(text + pos, size - pos, "GET / HTTP/1.1\r\n");
+    for (size_t i = 0; i < n; i ++) {
+        pos += (size_t)snprintf(text + pos, size - pos, "X-%zu: v\r\n", i);
+    }
+    snprintf(text + pos, size - pos, "\r\n");
+}
+
+static void test_header_limit(void) {
+    char text[4096];
+    char buf[4096];
+    struct http_request req;
+    enum http_parse_result result;
+
+    /* exactly the limit */
+    build_headers(text, sizeof(text), HTTP_MAX_HEADERS);
+    result = parse(text, buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.header_count == HTTP_MAX_HEADERS);
+
+    /* one more than the limit */
+    build_headers(text, sizeof(text), HTTP_MAX_HEADERS + 1);
+    result = parse(text, buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_TOO_MANY_HEADERS);
 }
 
 int main(void) {
@@ -492,6 +520,7 @@ int main(void) {
     test_header_names();
     test_header_values();
     test_header_value_chars();
+    test_header_limit();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 
