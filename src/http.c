@@ -57,6 +57,38 @@ static enum http_parse_result check_target(const char *target) {
     return HTTP_PARSE_OK;
 }
 
+static enum http_parse_result parse_header_line(char *line, struct http_request *req) {
+    (void)line;
+    (void)req;
+    return HTTP_PARSE_OK;
+}
+
+static enum http_parse_result parse_headers(char *p, const char *end, struct http_request *req) {
+    for (;;) {
+        char *line_end = strstr(p, "\r\n");
+        if (line_end == NULL) {
+            return HTTP_PARSE_BAD_REQUEST;
+        }
+
+        if (line_end == p) {
+            /* empty line: end of the headers */
+            if (line_end + 2 != end) {
+                return HTTP_PARSE_BAD_REQUEST;
+            }
+            return HTTP_PARSE_OK;
+        }
+
+        *line_end = '\0';
+        
+        enum http_parse_result result = parse_header_line(p, req);
+        if (result != HTTP_PARSE_OK) {
+            return result;
+        }
+
+        p = line_end + 2;
+    }
+}
+
 static enum http_parse_result parse_version(const char *version, struct http_request *req) {
     if (strcmp(version, "HTTP/1.1") == 0) {
         req->version_minor = 1;
@@ -137,9 +169,13 @@ enum http_parse_result http_parse_request(char *buf, size_t len, struct http_req
     *line_end = '\0';
 
     char *headers = line_end + 2;
-    (void)headers;
 
     enum http_parse_result result = parse_request_line(buf, req);
+    if (result != HTTP_PARSE_OK) {
+        return result;
+    }
+
+    result = parse_headers(headers, buf + len, req);
     if (result != HTTP_PARSE_OK) {
         return result;
     }

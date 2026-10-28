@@ -294,12 +294,32 @@ static void test_versions(void) {
     struct http_request req;
     enum http_parse_result result;
 
-    /* a third space puts "HTTP/1.1 x in the version" */
-    result = parse("GET / HTTP1.1 x\r\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
+    /* a third space puts "HTTP/1.1 x" in the version */
+    result = parse("GET / HTTP/1.1 x\r\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
     CHECK(result == HTTP_PARSE_BAD_REQUEST);
 
     /* a bare \n makes the request line run into the next line */
     result = parse("GET / HTTP/1.1\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+}
+
+static void test_headers(void) {
+    char buf[1024];
+    struct http_request req;
+    enum http_parse_result result;
+
+    /* no headers: the first line after the request line is the blank one */
+    result = parse("GET / HTTP/1.0\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.header_count == 0);
+
+    /* anything after the blank line is rejected */
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\n\r\nextra\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    /* two requests in one buffer (request smuggling) */
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n"
+                   "GET /admin HTTP/1.1\r\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
     CHECK(result == HTTP_PARSE_BAD_REQUEST);
 }
 
@@ -311,6 +331,7 @@ int main(void) {
     test_methods();
     test_targets();
     test_versions();
+    test_headers();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 
