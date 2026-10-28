@@ -79,6 +79,16 @@ static enum http_parse_result parse_header_line(char *line, struct http_request 
 
     char *value = colon + 1;
 
+    while (*value == ' ' || *value == '\t') {
+        value++;
+    }
+
+    char *v_end = value + strlen(value);
+    while (v_end > value && (v_end[-1] == ' ' || v_end[-1] == '\t')) {
+        v_end--;
+    }
+    *v_end = '\0';
+
     req->headers[req->header_count].name = line;
     req->headers[req->header_count].value = value;
     req->header_count++;

@@ -398,6 +398,49 @@ static void test_header_names(void) {
     CHECK(result == HTTP_PARSE_BAD_REQUEST);
 }
 
+static void test_header_values(void) {
+    static const struct {
+        const char *line;
+        const char *value;
+    } cases[] = {
+        { "X-A: hello",         "hello" },
+        { "X-A:hello",          "hello" },
+        { "X-A:   hello  ",     "hello" },
+        { "X-A:\thello\t",      "hello" },
+        { "X-A: \t hello \t ",  "hello" },
+        { "X-A: a b c",         "a b c" },
+        { "X-A: a\tb   ",       "a\tb" },
+        { "X-A:",               "" },
+        { "X-A:   ",            "" },
+        { "X-A:\t\t",           "" },
+        { "X-A: x",             "x" },
+    };
+
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        char text[256];
+        char buf[1024];
+        struct http_request req;
+        enum http_parse_result result;
+
+        snprintf(text, sizeof(text), "GET / HTTP/1.1\r\n%s\r\n\r\n", cases[i].line);
+
+        result = parse(text, buf, sizeof(buf), &req);
+        CHECK(result == HTTP_PARSE_OK);
+        CHECK(req.header_count == 1);
+
+        int ok = (result == HTTP_PARSE_OK && req.header_count == 1);
+        if (ok) {
+            CHECK(strcmp(req.headers[0].value, cases[i].value) == 0);
+        }
+
+        if (!ok || strcmp(req.headers[0].value, cases[i].value) != 0) {
+            fprintf(stderr, " (line was \"%s\")\n", cases[i].line);
+        }
+    }
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -408,6 +451,7 @@ int main(void) {
     test_versions();
     test_headers();
     test_header_names();
+    test_header_values();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 
