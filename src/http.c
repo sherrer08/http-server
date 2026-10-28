@@ -58,8 +58,23 @@ static enum http_parse_result check_target(const char *target) {
 }
 
 static enum http_parse_result parse_header_line(char *line, struct http_request *req) {
-    (void)line;
-    (void)req;
+    if (req->header_count == HTTP_MAX_HEADERS) {
+        return HTTP_PARSE_TOO_MANY_HEADERS;
+    }
+    
+    char *colon = strchr(line, ':');
+    if (colon == NULL) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    *colon = '\0';
+
+    char *value = colon + 1;
+
+    req->headers[req->header_count].name = line;
+    req->headers[req->header_count].value = value;
+    req->header_count++;
+
     return HTTP_PARSE_OK;
 }
 

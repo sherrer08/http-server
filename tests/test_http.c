@@ -321,6 +321,31 @@ static void test_headers(void) {
     result = parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n"
                    "GET /admin HTTP/1.1\r\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
     CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    result = parse("GET / HTTP/1.1\r\nHost x\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    result = parse("GET / HTTP/1.1\r\n"
+                   "Host: localhost:8080\r\n"
+                   "User-Agent: curl/8.5.0\r\n"
+                   "Accept: */*\r\n"
+                   "\r\n",
+                   buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.header_count == 3);
+    if (req.header_count == 3) {
+        CHECK(strcmp(req.headers[0].name, "Host") == 0);
+        CHECK(strcmp(req.headers[0].value, "localhost:8080") == 0);
+        CHECK(strcmp(req.headers[1].name, "User-Agent") == 0);
+        CHECK(strcmp(req.headers[2].name, "Accept") == 0);
+        CHECK(strcmp(req.headers[2].value, "*/*") == 0);
+    }
+
+    result = parse("GET / HTTP/1.1\r\nX-Empty:\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    if (result == HTTP_PARSE_OK && req.header_count == 1) {
+        CHECK(strcmp(req.headers[0].value, "") == 0);
+    }
 }
 
 int main(void) {
