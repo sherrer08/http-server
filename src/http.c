@@ -1,6 +1,7 @@
 #include "http.h"
 #include <string.h>
 #include <strings.h>
+#include <stdint.h>
 
 static const char TOKEN_CHARS[] =
     "!#$%&'*+-.^_`|~"
@@ -195,6 +196,31 @@ static enum http_parse_result parse_request_line(char *line, struct http_request
     return HTTP_PARSE_OK;
 }
 
+static int parse_content_length(const char *s, size_t *out) {
+    if (s[0] == '\0') {
+        return -1;
+    }
+
+    size_t n = 0;
+
+    for (size_t i = 0; s[i] != '\0'; i++) {
+        if (!is_digit(s[i])) {
+            return -1;
+        }
+
+        size_t d = (size_t)(s[i] - '0');
+
+        if (n > (SIZE_MAX - d) / 10) {
+            return -1;
+        }
+
+        n = n * 10 + d;
+    }
+
+    *out = n;
+    return 0;
+}
+
 static enum http_parse_result check_request(struct http_request *req) {
     size_t host_count = 0;
 
@@ -203,6 +229,16 @@ static enum http_parse_result check_request(struct http_request *req) {
 
         if (strcasecmp(name, "Host") == 0) {
             host_count++;
+        }
+
+        if (strcasecmp(name, "Content-Length") == 0) {
+            if (req->has_content_length) {
+                return HTTP_PARSE_BAD_REQUEST;
+            }
+            if (parse_content_length(req->headers[i].value, &req->content_length) != 0) {
+                return HTTP_PARSE_BAD_REQUEST;
+            }
+            req->has_content_length = 1;
         }
     }
 

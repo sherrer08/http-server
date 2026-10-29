@@ -1,7 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 #include "http.h"
+
+_Static_assert(SIZE_MAX == 18446744073709551615ULL,
+               "Content-Length boundary tests assume a 64-bit size_t");
 
 static int checks_run = 0;
 static int checks_failed = 0;
@@ -609,6 +613,74 @@ static void test_request_rules(void) {
     }
 }
 
+static void test_content_length(void) {
+    static const struct {
+        const char *value;
+        enum http_parse_result expected;
+        size_t length;
+    } cases[] = {
+        { "0",                        HTTP_PARSE_OK, 0 },
+        { "42",                       HTTP_PARSE_OK, 42 },
+        { "007",                      HTTP_PARSE_OK, 7 },
+        { "  42  ",                   HTTP_PARSE_OK, 42 },
+        { "18446744073709551615",     HTTP_PARSE_OK, SIZE_MAX },
+        { "",                         HTTP_PARSE_BAD_REQUEST, 0 },
+        { "abc",                      HTTP_PARSE_BAD_REQUEST, 0 },
+        { "-1",                       HTTP_PARSE_BAD_REQUEST, 0 },
+        { "+5",                       HTTP_PARSE_BAD_REQUEST, 0 },
+        { "4 2",                      HTTP_PARSE_BAD_REQUEST, 0 },
+        { "4,2",                      HTTP_PARSE_BAD_REQUEST, 0 },
+        { "0x10",                     HTTP_PARSE_BAD_REQUEST, 0 },
+        { "18446744073709551616",     HTTP_PARSE_BAD_REQUEST, 0 },
+        { "99999999999999999999999",  HTTP_PARSE_BAD_REQUEST, 0 },
+    };
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        char text[256];
+        char buf[1024];
+        struct http_request req;
+        enum http_parse_result result;
+
+        snprintf(text, sizeof(text), "GET / HTTP/1.1\r\nHost: x\r\nContent-Length: %s\r\n\r\n", cases[i].value);
+
+        result = parse(text, buf, sizeof(buf), &req);
+        CHECK(result == cases[i].expected);
+
+        if (result == HTTP_PARSE_OK && cases[i].expected == HTTP_PARSE_OK) {
+            CHECK(req.has_content_length == 1);
+            CHECK(req.content_length == cases[i].length);
+        }
+
+        if (result != cases[i].expected) {
+            fprintf(stderr, " (value was \"%s\")\n", cases[i].value);
+        }
+    }
+
+    char buf[1024];
+    struct http_request req;
+    enum http_parse_result result;
+
+    /* no Content_Length: the flag stays 0 */
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.has_content_length == 0);
+
+    /* the name is case-insensitive */
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\ncontent-length: 5\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.has_content_length == 1);
+    CHECK(req.content_length == 5);
+
+    /* duplicate with the same value */
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 5\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+
+    /* duplicate with different values */
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nContent-Length: 6\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_BAD_REQUEST);
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -624,6 +696,7 @@ int main(void) {
     test_header_limit();
     test_header_lookup_cases();
     test_request_rules();
+    test_content_length();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 
