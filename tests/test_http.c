@@ -681,6 +681,92 @@ static void test_content_length(void) {
     CHECK(result == HTTP_PARSE_BAD_REQUEST);
 }
 
+static void test_transfer_encoding(void) {
+    char buf[1024];
+    struct http_request req;
+    enum http_parse_result result;
+
+    /* --- accepted: Transfer-Encoding alone --- */
+    result = parse("GET / HTTP/1.1\r\n"
+                   "Host: x\r\n"
+                   "Transfer-Encoding: chunked\r\n"
+                   "\r\n",
+                   buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.has_transfer_encoding == 1);
+    CHECK(req.has_content_length == 0);
+
+    /* --- accepted: lowercase name --- */
+    result = parse("GET / HTTP/1.1\r\n"
+                   "Host: x\r\n"
+                   "transfer-encoding: chunked\r\n"
+                   "\r\n",
+                   buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.has_transfer_encoding == 1);
+
+    /* --- accepted: more than one Transfer-Encoding header --- */
+    result = parse("GET / HTTP/1.1\r\n"
+                   "Host: x\r\n"
+                   "Transfer-Encoding: gzip\r\n"
+                   "Transfer-Encoding: chunked\r\n"
+                   "\r\n",
+                   buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.has_transfer_encoding == 1);
+
+    /* --- accepted: neither header, both flags stay 0 --- */
+    result = parse("GET / HTTP/1.1\r\nHost: x\r\n\r\n", buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.has_transfer_encoding == 0);
+    CHECK(req.has_content_length == 0);
+
+    /* --- accepted: HTTP/1.0 with Content-Length (only TE is banned in 1.0) --- */
+    result = parse("GET / HTTP/1.0\r\nContent-Length: 5\r\n\r\n",
+                   buf, sizeof(buf), &req);
+    CHECK(result == HTTP_PARSE_OK);
+    CHECK(req.has_content_length == 1);
+    CHECK(req.content_length == 5);
+
+    /* --- rejected: ambiguous or invalid body framing --- */
+    static const char *rejected[] = {
+        /* Content-Length first, then Transfer-Encoding */
+        "GET / HTTP/1.1\r\n"
+        "Host: x\r\n"
+        "Content-Length: 5\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n",
+
+        /* Transfer-Encoding first, then Content-Length */
+        "GET / HTTP/1.1\r\n"
+        "Host: x\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "Content-Length: 5\r\n"
+        "\r\n",
+
+        /* different capitalizations of both */
+        "GET / HTTP/1.1\r\n"
+        "Host: x\r\n"
+        "content-length: 5\r\n"
+        "TRANSFER-ENCODING: chunked\r\n"
+        "\r\n",
+
+        /* Transfer-Encoding in HTTP/1.0 */
+        "GET / HTTP/1.0\r\n"
+        "Transfer-Encoding: chunked\r\n"
+        "\r\n",
+    };
+    const size_t count = sizeof(rejected) / sizeof(rejected[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        result = parse(rejected[i], buf, sizeof(buf), &req);
+        CHECK(result == HTTP_PARSE_BAD_REQUEST);
+        if (result != HTTP_PARSE_BAD_REQUEST) {
+            fprintf(stderr, "  (rejected case %zu)\n", i);
+        }
+    }
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -697,6 +783,7 @@ int main(void) {
     test_header_lookup_cases();
     test_request_rules();
     test_content_length();
+    test_transfer_encoding();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 

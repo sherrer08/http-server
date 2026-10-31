@@ -58,7 +58,8 @@ struct http_request {
  * On HTTP_PARSE_OK, *req is filled in with pointers into buf: it is valid only
  * while buf exists and is not modified. On any other result, *req must not be
  * used. Rejects requests breaking the Host, Content-Length, and Transfer-Encoding
- * rules. Does no I/O.
+ * rules, and has_content_length and has_transfer_encoding report whether the
+ * request declared a body; the parser never sets both. Does no I/O.
  */
 enum http_parse_result http_parse_request(char *buf, size_t len, struct http_request *req);
 

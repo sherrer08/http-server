@@ -240,6 +240,10 @@ static enum http_parse_result check_request(struct http_request *req) {
             }
             req->has_content_length = 1;
         }
+
+        if (strcasecmp(name, "Transfer-Encoding") == 0) {
+            req->has_transfer_encoding = 1;
+        }
     }
 
     if (host_count > 1) {
@@ -247,6 +251,14 @@ static enum http_parse_result check_request(struct http_request *req) {
     }
 
     if (host_count == 0 && req->version_minor == 1) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (req->has_content_length && req->has_transfer_encoding) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (req->has_transfer_encoding && req->version_minor == 0) {
         return HTTP_PARSE_BAD_REQUEST;
     }
 
