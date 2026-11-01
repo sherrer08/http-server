@@ -767,6 +767,55 @@ static void test_transfer_encoding(void) {
     }
 }
 
+static void test_status_codes(void) {
+    static const struct {
+        int status;
+        const char *phrase;
+    } phrases[] = {
+        { 200, "OK" },
+        { 400, "Bad Request" },
+        { 405, "Method Not Allowed" },
+        { 413, "Content Too Large" },
+        { 414, "URI Too Long" },
+        { 431, "Request Header Fields Too Large" },
+        { 500, "Internal Server Error" },
+        { 501, "Not Implemented" },
+        { 505, "HTTP Version Not Supported" },
+        { 404, "Unknown" },
+        { 0,   "Unknown" },
+        { -1,  "Unknown" },
+    };
+    const size_t phrase_count = sizeof(phrases) / sizeof(phrases[0]);
+
+    for (size_t i = 0; i < phrase_count; i++) {
+        const char *p = http_reason_phrase(phrases[i].status);
+        CHECK(p != NULL);
+        if (p != NULL) {
+            CHECK(strcmp(p, phrases[i].phrase) == 0);
+        }
+        if (p == NULL || strcmp(p, phrases[i].phrase) != 0) {
+            fprintf(stderr, "  (status was %d)\n", phrases[i].status);
+        }
+    }
+
+    static const struct {
+        enum http_parse_result result;
+        int status;
+    } statuses[] = {
+        { HTTP_PARSE_OK,                    200 },
+        { HTTP_PARSE_BAD_REQUEST,           400 },
+        { HTTP_PARSE_URI_TOO_LONG,          414 },
+        { HTTP_PARSE_TOO_MANY_HEADERS,      431 },
+        { HTTP_PARSE_VERSION_NOT_SUPPORTED, 505 },
+    };
+    const size_t status_count = sizeof(statuses) / sizeof(statuses[0]);
+
+    for (size_t i = 0; i < status_count; i++) {
+        CHECK(http_status_for_parse_result(statuses[i].result) ==
+              statuses[i].status);
+    }
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -784,6 +833,7 @@ int main(void) {
     test_request_rules();
     test_content_length();
     test_transfer_encoding();
+    test_status_codes();
 
     printf("%d checks, %d failed\n", checks_run, checks_failed);
 

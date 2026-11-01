@@ -70,4 +70,18 @@ enum http_parse_result http_parse_request(char *buf, size_t len, struct http_req
  */
 const char *http_get_header(const struct http_request *req, const char *name);
 
+/*
+ * Returns the standard reason phrase for an HTTP status code, such as
+ * "Not Found" for 404, or "Unknown" for a code this server doesn't use.
+ * The returned string is a constant that is valid for the life of the 
+ * program.
+*/
+const char *http_reason_phrase(int status);
+
+/*
+ * Returns the HTTP status code to send for a parse result: 400, 414, 431,
+ * or 505 for the errors, and 200 for HTTP_PARSE_OK.
+*/
+int http_status_for_parse_result(enum http_parse_result result);
+
 #endif

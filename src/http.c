@@ -310,3 +310,29 @@ const char *http_get_header(const struct http_request *req, const char *name) {
     }
     return NULL;
 }
+
+const char *http_reason_phrase(int status) {
+    switch (status) {
+        case 200: return "OK";
+        case 400: return "Bad Request";
+        case 405: return "Method Not Allowed";
+        case 413: return "Content Too Large";
+        case 414: return "URI Too Long";
+        case 431: return "Request Header Fields Too Large";
+        case 500: return "Internal Server Error";
+        case 501: return "Not Implemented";
+        case 505: return "HTTP Version Not Supported";
+        default: return "Unknown";
+    }
+}
+
+int http_status_for_parse_result(enum http_parse_result result) {
+    switch (result) {
+        case HTTP_PARSE_OK:                    return 200;
+        case HTTP_PARSE_BAD_REQUEST:           return 400;
+        case HTTP_PARSE_URI_TOO_LONG:          return 414;
+        case HTTP_PARSE_TOO_MANY_HEADERS:      return 431;
+        case HTTP_PARSE_VERSION_NOT_SUPPORTED: return 505;
+    }
+    return 500;    /* not reachable for valid enum values */
+}
