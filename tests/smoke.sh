@@ -42,6 +42,6 @@ check "unknown"      501 -X BREW "$URL/"
 check "no Host"      400 -H 'Host:' "$URL/"
 check "long target"  414 "$URL/$(head -c 1100 /dev/zero | tr '\0' a)"
 
-echo "$failures failed
+echo "$failures failed"
 [ "$failures" -eq 0 ]
 
