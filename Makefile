@@ -20,7 +20,7 @@ TEST_NAME = test_http
 
 TEST_OBJS = build/$(TEST_NAME).o
 
-.PHONY: all clean run test test-asan
+.PHONY: all clean run test test-asan smoke
 
 all: build/server build/$(TEST_NAME)
 
@@ -56,6 +56,14 @@ run-asan:
 	@mkdir -p build
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) $(SRCS) $(LDFLAGS) -o build/server_asan
 	./build/server_asan
+
+smoke: build/server
+	./tests/smoke.sh ./build/server
+
+smoke-asan:
+	@mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) $(SRCS) $(LDFLAGS) -o build/server_asan
+	./tests/smoke.sh ./build/server_asan
 
 -include $(OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
