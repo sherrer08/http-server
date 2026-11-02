@@ -25,3 +25,9 @@ jobs:
 
       - name: Run sanitizer tests
         run: make test-asan
+
+      - name: Run smoke test
+        run: make smoke
+
+      - name: Run smoke with sanitizers
+        run: make smoke-asan

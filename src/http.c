@@ -1,0 +1,338 @@
+#include "http.h"
+#include <string.h>
+#include <strings.h>
+#include <stdint.h>
+
+static const char TOKEN_CHARS[] =
+    "!#$%&'*+-.^_`|~"
+    "0123456789"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz";
+
+static int is_digit(char c) {
+    return c >= '0' && c <= '9';
+}
+
+static int is_value_char(unsigned char c) {
+    return c == '\t' || (c >= ' ' && c != 127);
+}
+
+static enum http_method method_from_string(const char *s) {
+    static const struct {
+        const char *name;
+        enum http_method method;
+    } METHODS[] = {
+        { "GET",     HTTP_METHOD_GET },
+        { "HEAD",    HTTP_METHOD_HEAD },
+        { "POST",    HTTP_METHOD_POST },
+        { "PUT",     HTTP_METHOD_PUT },
+        { "DELETE",  HTTP_METHOD_DELETE },
+        { "CONNECT", HTTP_METHOD_CONNECT },
+        { "OPTIONS", HTTP_METHOD_OPTIONS },
+        { "TRACE",   HTTP_METHOD_TRACE },
+        { "PATCH",   HTTP_METHOD_PATCH },
+    };
+
+    size_t rows = sizeof(METHODS) / sizeof(METHODS[0]);
+
+    for (size_t i = 0; i < rows; i++) {
+        if (strcmp(s, METHODS[i].name) == 0) {
+            return METHODS[i].method;
+        }
+    }
+
+    return HTTP_METHOD_UNKNOWN;
+}
+
+static enum http_parse_result check_target(const char *target) {
+    if (strlen(target) > HTTP_MAX_TARGET_LEN) {
+        return HTTP_PARSE_URI_TOO_LONG;
+    }
+
+    if (target[0] != '/') {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    for (size_t i = 0; target[i] != '\0'; i++) {
+        unsigned char c = (unsigned char)target[i];
+        if (c < '!' || c > '~') {
+            return HTTP_PARSE_BAD_REQUEST;
+        }
+    }
+
+    return HTTP_PARSE_OK;
+}
+
+static enum http_parse_result parse_header_line(char *line, struct http_request *req) {
+    if (req->header_count == HTTP_MAX_HEADERS) {
+        return HTTP_PARSE_TOO_MANY_HEADERS;
+    }
+    
+    char *colon = strchr(line, ':');
+    if (colon == NULL) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    *colon = '\0';
+
+    if (line[0] == '\0') {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (strspn(line, TOKEN_CHARS) != strlen(line)) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    char *value = colon + 1;
+
+    while (*value == ' ' || *value == '\t') {
+        value++;
+    }
+
+    char *v_end = value + strlen(value);
+    while (v_end > value && (v_end[-1] == ' ' || v_end[-1] == '\t')) {
+        v_end--;
+    }
+    *v_end = '\0';
+
+    for (size_t i = 0; value[i] != '\0'; i++) {
+        if (!is_value_char((unsigned char)value[i])) {
+            return HTTP_PARSE_BAD_REQUEST;
+        }
+    }
+
+    req->headers[req->header_count].name = line;
+    req->headers[req->header_count].value = value;
+    req->header_count++;
+
+    return HTTP_PARSE_OK;
+}
+
+static enum http_parse_result parse_headers(char *p, const char *end, struct http_request *req) {
+    for (;;) {
+        char *line_end = strstr(p, "\r\n");
+        if (line_end == NULL) {
+            return HTTP_PARSE_BAD_REQUEST;
+        }
+
+        if (line_end == p) {
+            /* empty line: end of the headers */
+            if (line_end + 2 != end) {
+                return HTTP_PARSE_BAD_REQUEST;
+            }
+            return HTTP_PARSE_OK;
+        }
+
+        *line_end = '\0';
+        
+        enum http_parse_result result = parse_header_line(p, req);
+        if (result != HTTP_PARSE_OK) {
+            return result;
+        }
+
+        p = line_end + 2;
+    }
+}
+
+static enum http_parse_result parse_version(const char *version, struct http_request *req) {
+    if (strcmp(version, "HTTP/1.1") == 0) {
+        req->version_minor = 1;
+        return HTTP_PARSE_OK;
+    }
+    
+    if (strcmp(version, "HTTP/1.0") == 0) {
+        req->version_minor = 0;
+        return HTTP_PARSE_OK;
+    }
+
+    if (strlen(version) == 8 && strncmp(version, "HTTP/", 5) == 0 && is_digit(version[5]) && version[6] == '.' && is_digit(version[7])) {
+        return HTTP_PARSE_VERSION_NOT_SUPPORTED;
+    } else {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+}
+
+static enum http_parse_result parse_request_line(char *line, struct http_request *req) {
+    char *sp1 = strchr(line, ' ');
+
+    if (sp1 == NULL) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    *sp1 = '\0';
+    req->method_str = line;
+    char *target = sp1 + 1;
+
+    char *sp2 = strchr(target, ' ');
+
+    if (sp2 == NULL) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    *sp2 = '\0';
+    req->target = target;
+    char *version = sp2 + 1;
+
+    if (line[0] == '\0' || target[0] == '\0' || version[0] == '\0') {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (strspn(line, TOKEN_CHARS) != strlen(line)) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    req->method = method_from_string(line);
+
+    enum http_parse_result result = check_target(target);
+    if (result != HTTP_PARSE_OK) {
+        return result;
+    }
+
+    result = parse_version(version, req);
+    if (result != HTTP_PARSE_OK) {
+        return result;
+    }
+
+    return HTTP_PARSE_OK;
+}
+
+static int parse_content_length(const char *s, size_t *out) {
+    if (s[0] == '\0') {
+        return -1;
+    }
+
+    size_t n = 0;
+
+    for (size_t i = 0; s[i] != '\0'; i++) {
+        if (!is_digit(s[i])) {
+            return -1;
+        }
+
+        size_t d = (size_t)(s[i] - '0');
+
+        if (n > (SIZE_MAX - d) / 10) {
+            return -1;
+        }
+
+        n = n * 10 + d;
+    }
+
+    *out = n;
+    return 0;
+}
+
+static enum http_parse_result check_request(struct http_request *req) {
+    size_t host_count = 0;
+
+    for (size_t i = 0; i < req->header_count; i++) {
+        const char *name = req->headers[i].name;
+
+        if (strcasecmp(name, "Host") == 0) {
+            host_count++;
+        }
+
+        if (strcasecmp(name, "Content-Length") == 0) {
+            if (req->has_content_length) {
+                return HTTP_PARSE_BAD_REQUEST;
+            }
+            if (parse_content_length(req->headers[i].value, &req->content_length) != 0) {
+                return HTTP_PARSE_BAD_REQUEST;
+            }
+            req->has_content_length = 1;
+        }
+
+        if (strcasecmp(name, "Transfer-Encoding") == 0) {
+            req->has_transfer_encoding = 1;
+        }
+    }
+
+    if (host_count > 1) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (host_count == 0 && req->version_minor == 1) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (req->has_content_length && req->has_transfer_encoding) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    if (req->has_transfer_encoding && req->version_minor == 0) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    return HTTP_PARSE_OK;
+}
+
+enum http_parse_result http_parse_request(char *buf, size_t len, struct http_request *req) {
+    memset(req, 0, sizeof(*req));
+    
+    if (len < 4 || memcmp(buf + len - 4, "\r\n\r\n", 4) != 0) {
+        return HTTP_PARSE_BAD_REQUEST;
+    } else if (memchr(buf, '\0', len) != NULL) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    char *line_end = strstr(buf, "\r\n");
+
+    if (line_end == NULL) {
+        return HTTP_PARSE_BAD_REQUEST;
+    }
+
+    *line_end = '\0';
+
+    char *headers = line_end + 2;
+
+    enum http_parse_result result = parse_request_line(buf, req);
+    if (result != HTTP_PARSE_OK) {
+        return result;
+    }
+
+    result = parse_headers(headers, buf + len, req);
+    if (result != HTTP_PARSE_OK) {
+        return result;
+    }
+
+    result = check_request(req);
+    if (result != HTTP_PARSE_OK) {
+        return result;
+    }
+
+    return HTTP_PARSE_OK;
+}
+
+const char *http_get_header(const struct http_request *req, const char *name) {
+    for (size_t i = 0; i < req->header_count; i++) {
+        if (strcasecmp(req->headers[i].name, name) == 0) {
+            return req->headers[i].value;
+        }
+    }
+    return NULL;
+}
+
+const char *http_reason_phrase(int status) {
+    switch (status) {
+        case 200: return "OK";
+        case 400: return "Bad Request";
+        case 405: return "Method Not Allowed";
+        case 413: return "Content Too Large";
+        case 414: return "URI Too Long";
+        case 431: return "Request Header Fields Too Large";
+        case 500: return "Internal Server Error";
+        case 501: return "Not Implemented";
+        case 505: return "HTTP Version Not Supported";
+        default: return "Unknown";
+    }
+}
+
+int http_status_for_parse_result(enum http_parse_result result) {
+    switch (result) {
+        case HTTP_PARSE_OK:                    return 200;
+        case HTTP_PARSE_BAD_REQUEST:           return 400;
+        case HTTP_PARSE_URI_TOO_LONG:          return 414;
+        case HTTP_PARSE_TOO_MANY_HEADERS:      return 431;
+        case HTTP_PARSE_VERSION_NOT_SUPPORTED: return 505;
+    }
+    return 500;    /* not reachable for valid enum values */
+}

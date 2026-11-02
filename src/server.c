@@ -1,4 +1,5 @@
 #include "server.h"
+#include "http.h"
 #include <stdio.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -8,9 +9,16 @@
 
 #define LISTEN_BACKLOG 16
 #define REQUEST_BUF_SIZE 4096
-#define HEADER_BUFFER_SIZE 256
+#define HEADER_BUFFER_SIZE 512
+#define RESPONSE_BODY_SIZE 2048
 
-static const char BODY[] = "Hello, world!\n";
+enum read_result {
+    READ_OK,
+    READ_CLOSED,
+    READ_ERROR,
+    READ_TOO_LARGE,
+    READ_BAD
+};
 
 int server_listen(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -63,7 +71,7 @@ int server_listen(int port) {
  * Returns 0 on success, or -1 on error (errno is set).
  * Uses MSG_NOSIGNAL so a closed connection returns an error instead of
  * killing the process with SIGPIPE.
- */
+*/
 static int send_all(int fd, const char *data, size_t len) {
     size_t sent = 0;
 
@@ -80,40 +88,233 @@ static int send_all(int fd, const char *data, size_t len) {
     return 0;
 }
 
-static void handle_client(int client_fd) {
-    /* M1 simplification: assumes the whole request arrives in one recv.
-       M2 will read until the end of the headers. */
-    char buf[REQUEST_BUF_SIZE];
-    ssize_t n = recv(client_fd, buf, sizeof(buf) - 1, 0);
+/*
+ * Reads from fd until buf holds a complete HTTP header section, ending in
+ * "\r\n\r\n". buf has room for cap bytes; one byte is always kept free so
+ * the data can be '\0'-terminated.
+ * On READ_OK, *header_len is the length of the header section, including
+ * the "\r\n\r\n". Any bytes after it are left in buf, unused.
+ * Returns READ_TOO_LARGE if buf fills up without a complete header section,
+ * READ_BAD if a '\0' byte arrives, READ_CLOSED if the client closes first,
+ * and READ_ERROR if recv fails (the reason is printed).
+ */
+static enum read_result read_request(int fd, char *buf, size_t cap, size_t *header_len) {
+    size_t received = 0;
 
-    if (n > 0) {
-        buf[n] = '\0';
-        
-        printf("received %zd bytes:\n%s", n, buf);
-        fflush(stdout);
-
-        char header_buf[HEADER_BUFFER_SIZE];
-
-        int header_len = snprintf(header_buf, sizeof(header_buf),
-                                  "HTTP/1.1 200 OK\r\n"
-                                  "Content-Type: text/plain\r\n"
-                                  "Content-Length: %zu\r\n"
-                                  "Connection: close\r\n"
-                                  "\r\n",
-                                  strlen(BODY));
-        
-        if (header_len < 0 || (size_t)header_len >= sizeof(header_buf)) {
-            fprintf(stderr, "response headers too long\n");
-        } else if (send_all(client_fd, header_buf, (size_t)header_len) == -1 ||
-                   send_all(client_fd, BODY, strlen(BODY)) == -1) {
-            perror("send");
+    for (;;) {
+        if (received == cap - 1) {
+            return READ_TOO_LARGE;
         }
-    } else if (n == 0) {
-        printf("client closed without sending\n");
-    } else {
-        perror("recv");
+
+        ssize_t n = recv(fd, buf + received, cap - 1 - received, 0);
+
+        if (n == 0) {
+            return READ_CLOSED;
+        } else if (n == -1) {
+            perror("recv");
+            return READ_ERROR;
+        } else {
+            if (memchr(buf + received, '\0', (size_t)n) != NULL) {
+                return READ_BAD;
+            }
+        }
+
+        received += (size_t)n;
+        buf[received] = '\0';
+
+        char *end = strstr(buf, "\r\n\r\n");
+        if (end != NULL) {
+            *header_len = (size_t)(end - buf) + 4;
+            return READ_OK;
+        }
+    }
+}
+
+/*
+ * Sends a complete HTTP response on fd: status line, headers, and
+ * (if send_body is 1) the body.
+ * extra_headers is inserted before the blank line; each header must end in
+ * "\r\n". Pass "" for none, never NULL, and never build it from request
+ * data. Content-Length is always body_len, even when send_body is 0.
+ * Returns 0 on success, or -1 if the response could not be built or sent.
+*/
+static int send_response(int fd, int status, const char *extra_headers, const char *body, size_t body_len, int send_body) {
+    char header_buf[HEADER_BUFFER_SIZE];
+
+    int header_len = snprintf(header_buf, sizeof(header_buf),
+                              "HTTP/1.1 %d %s\r\n"
+                              "Content-Type: text/plain\r\n"
+                              "Content-Length: %zu\r\n"
+                              "X-Content-Type-Options: nosniff\r\n"
+                              "Connection: close\r\n"
+                              "%s"
+                              "\r\n",
+                              status, http_reason_phrase(status),
+                              body_len, extra_headers);
+
+    if (header_len < 0 || (size_t)header_len >= sizeof(header_buf)) {
+        fprintf(stderr, "response headers too long\n");
+        return -1;
     }
 
+    if (send_all(fd, header_buf, (size_t)header_len) == -1) {
+        return -1;
+    }
+
+    if (send_body && send_all(fd, body, body_len) == -1) {
+        return -1;
+    }
+
+    return 0;
+}
+
+/*
+ * Sends an error response with a short plain-text body naming the status,
+ * such as "405 Method Not Allowed\n". extra_headers follows the same rules
+ * as in send_response. Returns 0 on success, or -1 on failure.
+*/
+static int send_error(int fd, int status, const char *extra_headers) {
+    char body[128];
+
+    int body_len = snprintf(body, sizeof(body), "%d %s\n", status, http_reason_phrase(status));
+
+    if (body_len < 0 || (size_t)body_len >= sizeof(body)) {
+        fprintf(stderr, "error body too long\n");
+        return -1;
+    }
+
+    return send_response(fd, status, extra_headers, body, (size_t)body_len, 1);
+}
+
+/*
+ * Decides the status for a successfully parsed request, based on what this
+ * server supports: 405 for known methods other than GET and HEAD, 501 for
+ * unknown methods and for Transfer-Encoding, 413 for a non-zero
+ * Content-Length, and 200 otherwise.
+ * Always sets *extra_headers: to "Allow: GET, HEAD\r\n" for a 405, and to
+ * "" otherwise.
+ */
+static int decide_status(const struct http_request *req, const char **extra_headers) {
+    *extra_headers = "";
+    switch (req->method) {
+        case HTTP_METHOD_GET:
+        case HTTP_METHOD_HEAD:
+            break;
+        case HTTP_METHOD_POST:
+        case HTTP_METHOD_PUT:
+        case HTTP_METHOD_DELETE:
+        case HTTP_METHOD_CONNECT:
+        case HTTP_METHOD_OPTIONS:
+        case HTTP_METHOD_TRACE:
+        case HTTP_METHOD_PATCH:
+            *extra_headers = "Allow: GET, HEAD\r\n";
+            return 405;
+        case HTTP_METHOD_UNKNOWN:
+            return 501;
+    }
+
+    if (req->has_transfer_encoding) {
+        return 501;
+    }
+
+    if (req->has_content_length && req->content_length > 0) {
+        return 413;
+    }
+
+    return 200;
+}
+
+/*
+ * Prints one log line for a connection: the client's address, the request
+ * line in quotes (or "-" if req is NULL because the request didn't parse),
+ * and the status sent (or "-" if status is 0 because nothing was sent).
+ * req's string fields must still be valid, so the request buffer must
+ * still exist. Flushes stdout.
+ */
+static void log_request(const char *peer, const struct http_request *req, int status) {
+    printf("%s", peer);
+    
+    if (req != NULL) {
+        printf(" \"%s %s HTTP/1.%d\"", req->method_str, req->target, req->version_minor);
+    } else {
+        printf(" -");
+    }
+
+    if (status != 0) {
+        printf(" %d", status);
+    } else {
+        printf(" -");
+    }
+
+    printf("\n");
+    fflush(stdout);
+}
+
+/*
+ * Handles one connection: reads a request, sends a response, logs one line,
+ * and closes client_fd. peer is the client's address, as "ip:port", used
+ * only for logging. Every path closes client_fd before returning.
+ */
+static void handle_client(int client_fd, const char *peer) {
+    char buf[REQUEST_BUF_SIZE];
+    size_t header_len;
+    struct http_request req;
+    int parsed = 0;
+    int status = 0;
+
+    enum read_result rr = read_request(client_fd, buf, sizeof(buf), &header_len);
+
+    switch (rr) {
+        case READ_OK: {
+            buf[header_len] = '\0';
+
+            enum http_parse_result result = http_parse_request(buf, header_len, &req);
+
+            if (result != HTTP_PARSE_OK) {
+                status = http_status_for_parse_result(result);
+                send_error(client_fd, status, "");
+                break;
+            }
+
+            const char *extra_headers = "";
+            parsed = 1;
+            status = decide_status(&req, &extra_headers);
+
+            if (status != 200) {
+                send_error(client_fd, status, extra_headers);
+                break;
+            }
+
+            char body[RESPONSE_BODY_SIZE];
+            int body_len = snprintf(body, sizeof(body), "You requested GET %s\n", req.target);
+
+            if (body_len < 0 || (size_t)body_len >= sizeof(body)) {
+                status = 500;
+                send_error(client_fd, status, "");
+                break;
+            }
+
+            status = 200;
+            int send_body = (req.method == HTTP_METHOD_GET);
+            send_response(client_fd, status, "", body, (size_t)body_len, send_body);
+
+            break;
+        }
+        case READ_TOO_LARGE:
+            status = 431;
+            send_error(client_fd, status, "");
+            break;
+        case READ_BAD:
+            status = 400;
+            send_error(client_fd, status, "");
+            break;
+        case READ_CLOSED:
+        case READ_ERROR:
+            break;
+    }
+
+    log_request(peer, parsed ? &req : NULL, status);
+    
     close(client_fd);
 }
 
@@ -133,8 +334,9 @@ void server_run(int listen_fd) {
 
         inet_ntop(AF_INET, &client_addr.sin_addr, ip, sizeof(ip));
 
-        printf("connection from %s:%d\n", ip, ntohs(client_addr.sin_port));
+        char peer[INET_ADDRSTRLEN + 8];
+        snprintf(peer, sizeof(peer), "%s:%d", ip, ntohs(client_addr.sin_port));
 
-        handle_client(client_fd);
+        handle_client(client_fd, peer);
     }
 }

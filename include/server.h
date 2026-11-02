@@ -11,13 +11,15 @@
 int server_listen(int port);
 
 /*
- * Accepts and serves clients on listen_fd, one at a time: for each
- * connections, reads the request, sends a fixed HTTP response, and closes
- * the connection. listen_fd must come from server_listen.
- * Errors on a single connection are printed to stderr and the server
+ * Accepts and serves clients on listen_fd, one at a time. For each
+ * connection: reads the request's header section, parses and validates it,
+ * sends the matching response (200 for GET and HEAD, or an error status),
+ * logs one line, and closes the connection. listen_fd must come from
+ * server_listen.
+ * Errors on a single connection are answered or logged, and the server
  * moves on to the next client.
  * Does not return. Does not close listen_fd.
-*/
+ */
 void server_run(int listen_fd);
 
 #endif

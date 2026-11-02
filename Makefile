@@ -1,6 +1,6 @@
 CC = gcc
 
-CFLAGS = -Wall -Wextra -std=c11 -g -MMD -MP
+CFLAGS = -Wall -Wextra -std=c11 -g -MMD -MP -Wshadow
 
 CPPFLAGS = -Iinclude -D_POSIX_C_SOURCE=200809L
 
@@ -16,16 +16,18 @@ LIB_OBJS = $(filter-out build/main.o, $(OBJS))
 
 LIB_SRCS = $(filter-out src/main.c, $(SRCS))
 
-TEST_OBJS = build/test_util.o
+TEST_NAME = test_http
 
-.PHONY: all clean run test test-asan
+TEST_OBJS = build/$(TEST_NAME).o
 
-all: build/server build/test_util
+.PHONY: all clean run test test-asan smoke
+
+all: build/server build/$(TEST_NAME)
 
 build/server: $(OBJS)
 	$(CC) $(LDFLAGS) $^ -o $@
 
-build/test_util: build/test_util.o $(LIB_OBJS)
+build/$(TEST_NAME): build/$(TEST_NAME).o $(LIB_OBJS)
 	$(CC) $(LDFLAGS) $^ -o $@
 
 build/%.o: src/%.c
@@ -42,13 +44,26 @@ clean:
 run: build/server
 	./build/server
 
-test: build/test_util
-	./build/test_util
+test: build/$(TEST_NAME)
+	./build/$(TEST_NAME)
 
 test-asan: 
 	@mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) tests/test_util.c $(LIB_SRCS) $(LDFLAGS) -o build/test_util_asan
-	./build/test_util_asan
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) tests/$(TEST_NAME).c $(LIB_SRCS) $(LDFLAGS) -o build/$(TEST_NAME)_asan
+	./build/$(TEST_NAME)_asan
+
+run-asan:
+	@mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) $(SRCS) $(LDFLAGS) -o build/server_asan
+	./build/server_asan
+
+smoke: build/server
+	./tests/smoke.sh ./build/server
+
+smoke-asan:
+	@mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) $(SRCS) $(LDFLAGS) -o build/server_asan
+	./tests/smoke.sh ./build/server_asan
 
 -include $(OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
