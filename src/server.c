@@ -183,6 +183,13 @@ static void handle_client(int client_fd) {
 
             enum http_parse_result result = http_parse_request(buf, header_len, &req);
 
+            if (result != HTTP_PARSE_OK) {
+                send_error(client_fd, http_status_for_parse_result(result), "");
+                printf("parse error %d -> %d\n", (int)result, http_status_for_parse_result(result));
+                fflush(stdout);
+                break;
+            }
+
             if (result == HTTP_PARSE_OK) {
                 printf("%s %s -> parsed OK\n", req.method_str, req.target);
             } else {
@@ -200,6 +207,7 @@ static void handle_client(int client_fd) {
             fflush(stdout);
             break;
         case READ_BAD:
+            send_error(client_fd, 400, "");
             printf("bad request\n");
             fflush(stdout);
             break;

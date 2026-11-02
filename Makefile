@@ -52,6 +52,11 @@ test-asan:
 	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) tests/$(TEST_NAME).c $(LIB_SRCS) $(LDFLAGS) -o build/$(TEST_NAME)_asan
 	./build/$(TEST_NAME)_asan
 
+run-asan:
+	@mkdir -p build
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) $(SRCS) $(LDFLAGS) -o build/server_asan
+	./build/server_asan
+
 -include $(OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
 print:
