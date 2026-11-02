@@ -120,8 +120,8 @@ static enum read_result read_request(int fd, char *buf, size_t cap, size_t *head
 }
 
 /*
- * Sends a complete HTTP resonse on fd: status line, headers, and
- * (if send_only is 1) the body.
+ * Sends a complete HTTP response on fd: status line, headers, and
+ * (if send_body is 1) the body.
  * extra_headers is inserted before the blank line; each header must end in
  * "\r\n". Pass "" for none, never NULL, and never build it from request
  * data. Content-Length is always body_len, even when send_body is 0.
@@ -135,6 +135,7 @@ static int send_response(int fd, int status, const char *extra_headers, const ch
                               "Content-Type: text/plain\r\n"
                               "Content-Length: %zu\r\n"
                               "X-Content-Type-Options: nosniff\r\n"
+                              "Connection: close\r\n"
                               "%s"
                               "\r\n",
                               status, http_reason_phrase(status),
@@ -156,10 +157,15 @@ static int send_response(int fd, int status, const char *extra_headers, const ch
     return 0;
 }
 
+/*
+ * Sends an error response with a short plain-text body naming the status,
+ * such as "405 Method Not Allowed\n". extra_headers follows the same rules
+ * as in send_response. Returns 0 on success, or -1 on failure.
+*/
 static int send_error(int fd, int status, const char *extra_headers) {
     char body[128];
 
-    int body_len =  snprintf(body, sizeof(body), "%d %s\n", status, http_reason_phrase(status));
+    int body_len = snprintf(body, sizeof(body), "%d %s\n", status, http_reason_phrase(status));
 
     if (body_len < 0 || (size_t)body_len >= sizeof(body)) {
         fprintf(stderr, "error body too long\n");
@@ -167,6 +173,36 @@ static int send_error(int fd, int status, const char *extra_headers) {
     }
 
     return send_response(fd, status, extra_headers, body, (size_t)body_len, 1);
+}
+
+static int decide_status(const struct http_request *req, const char **extra_headers) {
+    *extra_headers = "";
+    switch (req->method) {
+        case HTTP_METHOD_GET:
+        case HTTP_METHOD_HEAD:
+            break;
+        case HTTP_METHOD_POST:
+        case HTTP_METHOD_PUT:
+        case HTTP_METHOD_DELETE:
+        case HTTP_METHOD_CONNECT:
+        case HTTP_METHOD_OPTIONS:
+        case HTTP_METHOD_TRACE:
+        case HTTP_METHOD_PATCH:
+            *extra_headers = "Allow: GET, HEAD\r\n";
+            return 405;
+        case HTTP_METHOD_UNKNOWN:
+            return 501;
+    }
+
+    if (req->has_transfer_encoding) {
+        return 501;
+    }
+
+    if (req->has_content_length && req->content_length > 0) {
+        return 413;
+    }
+
+    return 200;
 }
 
 static void handle_client(int client_fd) {
@@ -190,11 +226,17 @@ static void handle_client(int client_fd) {
                 break;
             }
 
-            if (result == HTTP_PARSE_OK) {
-                printf("%s %s -> parsed OK\n", req.method_str, req.target);
-            } else {
-                printf("parse error %d\n", (int)result);
+            const char *extra_headers = "";
+            int status = decide_status(&req, &extra_headers);
+
+            if (status != 200) {
+                send_error(client_fd, status, extra_headers);
+                printf("%s %s -> %d\n", req.method_str, req.target, status);
+                fflush(stdout);
+                break;
             }
+
+            printf("%s %s -> 200\n", req.method_str, req.target);
             fflush(stdout);
 
             static const char hello[] = "Hello, world!\n";
