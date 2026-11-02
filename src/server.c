@@ -10,6 +10,7 @@
 #define LISTEN_BACKLOG 16
 #define REQUEST_BUF_SIZE 4096
 #define HEADER_BUFFER_SIZE 512
+#define RESPONSE_BODY_SIZE 2048
 
 enum read_result {
     READ_OK,
@@ -236,11 +237,22 @@ static void handle_client(int client_fd) {
                 break;
             }
 
+            char body[RESPONSE_BODY_SIZE];
+            int body_len = snprintf(body, sizeof(body), "You requested GET %s\n", req.target);
+
+            if (body_len < 0 || (size_t)body_len >= sizeof(body)) {
+                send_error(client_fd, 500, "");
+                printf("%s %s -> %d\n", req.method_str, req.target, 500);
+                fflush(stdout);
+                break;
+            }
+
+            int send_body = (req.method == HTTP_METHOD_GET);
+            send_response(client_fd, 200, "", body, (size_t)body_len, send_body);
+
             printf("%s %s -> 200\n", req.method_str, req.target);
             fflush(stdout);
 
-            static const char hello[] = "Hello, world!\n";
-            send_response(client_fd, 200, "", hello, sizeof(hello) - 1, 1);
             break;
         }
         case READ_TOO_LARGE:
