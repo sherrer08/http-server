@@ -9,7 +9,7 @@
 
 #define LISTEN_BACKLOG 16
 #define REQUEST_BUF_SIZE 4096
-#define HEADER_BUFFER_SIZE 256
+#define HEADER_BUFFER_SIZE 512
 
 enum read_result {
     READ_OK,
@@ -18,8 +18,6 @@ enum read_result {
     READ_TOO_LARGE,
     READ_BAD
 };
-
-static const char BODY[] = "Hello, world!\n";
 
 int server_listen(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
@@ -72,7 +70,7 @@ int server_listen(int port) {
  * Returns 0 on success, or -1 on error (errno is set).
  * Uses MSG_NOSIGNAL so a closed connection returns an error instead of
  * killing the process with SIGPIPE.
- */
+*/
 static int send_all(int fd, const char *data, size_t len) {
     size_t sent = 0;
 
@@ -121,26 +119,54 @@ static enum read_result read_request(int fd, char *buf, size_t cap, size_t *head
     }
 }
 
-/* Sends a fixed 200 OK plain-text response */
-static void send_fixed_response(int fd) {
+/*
+ * Sends a complete HTTP resonse on fd: status line, headers, and
+ * (if send_only is 1) the body.
+ * extra_headers is inserted before the blank line; each header must end in
+ * "\r\n". Pass "" for none, never NULL, and never build it from request
+ * data. Content-Length is always body_len, even when send_body is 0.
+ * Returns 0 on success, or -1 if the response could not be built or sent.
+*/
+static int send_response(int fd, int status, const char *extra_headers, const char *body, size_t body_len, int send_body) {
     char header_buf[HEADER_BUFFER_SIZE];
 
     int header_len = snprintf(header_buf, sizeof(header_buf),
-                              "HTTP/1.1 200 OK\r\n"
+                              "HTTP/1.1 %d %s\r\n"
                               "Content-Type: text/plain\r\n"
                               "Content-Length: %zu\r\n"
-                              "Connection: close \r\n"
+                              "X-Content-Type-Options: nosniff\r\n"
+                              "%s"
                               "\r\n",
-                              strlen(BODY));
+                              status, http_reason_phrase(status),
+                              body_len, extra_headers);
 
     if (header_len < 0 || (size_t)header_len >= sizeof(header_buf)) {
         fprintf(stderr, "response headers too long\n");
-        return;
+        return -1;
     }
 
-    if (send_all(fd, header_buf, (size_t)header_len) == -1 || send_all(fd, BODY, strlen(BODY)) == -1) {
-        perror("send");
+    if (send_all(fd, header_buf, (size_t)header_len) == -1) {
+        return -1;
     }
+
+    if (send_body && send_all(fd, body, body_len) == -1) {
+        return -1;
+    }
+
+    return 0;
+}
+
+static int send_error(int fd, int status, const char *extra_headers) {
+    char body[128];
+
+    int body_len =  snprintf(body, sizeof(body), "%d %s\n", status, http_reason_phrase(status));
+
+    if (body_len < 0 || (size_t)body_len >= sizeof(body)) {
+        fprintf(stderr, "error body too long\n");
+        return -1;
+    }
+
+    return send_response(fd, status, extra_headers, body, (size_t)body_len, 1);
 }
 
 static void handle_client(int client_fd) {
@@ -164,10 +190,12 @@ static void handle_client(int client_fd) {
             }
             fflush(stdout);
 
-            send_fixed_response(client_fd);
+            static const char hello[] = "Hello, world!\n";
+            send_response(client_fd, 200, "", hello, sizeof(hello) - 1, 1);
             break;
         }
         case READ_TOO_LARGE:
+            send_error(client_fd, 431, "");
             printf("request too large\n");
             fflush(stdout);
             break;
