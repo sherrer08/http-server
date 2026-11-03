@@ -255,7 +255,8 @@ static void log_request(const char *peer, const struct http_request *req, int st
  * and closes client_fd. peer is the client's address, as "ip:port", used
  * only for logging. Every path closes client_fd before returning.
  */
-static void handle_client(int client_fd, const char *peer) {
+static void handle_client(int client_fd, const char *peer, const char *docroot) {
+    (void) docroot;
     char buf[REQUEST_BUF_SIZE];
     size_t header_len;
     struct http_request req;
@@ -318,7 +319,7 @@ static void handle_client(int client_fd, const char *peer) {
     close(client_fd);
 }
 
-void server_run(int listen_fd) {
+void server_run(int listen_fd, const char *docroot) {
     struct sockaddr_in client_addr;
 
     for (;;) {
@@ -337,6 +338,6 @@ void server_run(int listen_fd) {
         char peer[INET_ADDRSTRLEN + 8];
         snprintf(peer, sizeof(peer), "%s:%d", ip, ntohs(client_addr.sin_port));
 
-        handle_client(client_fd, peer);
+        handle_client(client_fd, peer, docroot);
     }
 }

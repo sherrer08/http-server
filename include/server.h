@@ -19,7 +19,9 @@ int server_listen(int port);
  * Errors on a single connection are answered or logged, and the server
  * moves on to the next client.
  * Does not return. Does not close listen_fd.
+ * Serves files from docroot, which must be an absolut, resolved path to a
+ * directory, valid for as long as the server runs.
  */
-void server_run(int listen_fd);
+void server_run(int listen_fd, const char *docroot);
 
 #endif

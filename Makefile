@@ -2,7 +2,7 @@ CC = gcc
 
 CFLAGS = -Wall -Wextra -std=c11 -g -MMD -MP -Wshadow
 
-CPPFLAGS = -Iinclude -D_POSIX_C_SOURCE=200809L
+CPPFLAGS = -Iinclude -D_XOPEN_SOURCE=700
 
 LDFLAGS = 
 
