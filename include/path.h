@@ -6,7 +6,7 @@
 /* Result of decoding a request target into a file path. */
 enum path_result {
     PATH_OK,
-    PATH_BAD,       // malformed %-escape. or an escape that decodes to '\0'
+    PATH_BAD,       // malformed %-escape. or an escape that decodes to a control character (below 32, or 127)
     PATH_TOO_LONG   // the decoded path does not fit in the output buffer
 };
 
@@ -22,7 +22,7 @@ enum path_result {
 enum path_result path_decode(const char *target, char *out, size_t out_size);
 
 /*
- * Returns 1 if path, a decoded request path, contains no ".." segment, and 
+ * Returns 1 if path, a decoded request path, contains no "." segment, and 
  * 0 otherwise. A segment is the text between two '/' characters, or before
  * the first or after the last one. Does not touch the file system.
 */

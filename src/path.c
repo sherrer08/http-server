@@ -61,8 +61,31 @@ enum path_result path_decode(const char *target, char *out, size_t out_size) {
 }
 
 int path_is_safe(const char *path) {
-    (void) path;
-    return 0;
+    if (path[0] != '/') {
+        return 0;
+    }
+
+    const char *p = path;
+
+    while (*p != '\0') {
+        while (*p == '/') {
+            p++;
+        }
+
+        if (*p == '\0') {
+            break;
+        }
+
+        if (*p == '.') {
+            return 0;
+        }
+
+        while (*p != '/' && *p != '\0') {
+            p++;
+        }
+    }
+
+    return 1;
 }
 
 int path_within_root(const char *root, const char *resolved) {

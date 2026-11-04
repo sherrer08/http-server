@@ -75,8 +75,45 @@ static void test_decode(void) {
 }
 
 static void test_is_safe(void) {
-    CHECK(path_is_safe("/index.html") == 1);
-    CHECK(path_is_safe("/../etc/passwd") == 0);
+    static const struct {
+        const char *path;
+        int safe;
+    } cases[] = {
+        /* safe */
+        { "/",                      1 },
+        { "/index.html",            1 },
+        { "/a/b/c.html",            1 },
+        { "/a//b",                  1 },
+        { "/a..b",                  1 },
+        { "/a.b/c",                 1 },
+        { "/blog/",                 1 },
+        /* traversal */
+        { "/..",                    0 },
+        { "/../etc/passwd",         0 },
+        { "/a/../../etc/passwd",    0 },
+        { "/a/..",                  0 },
+        { "/a/../b",                0 },
+        { "//../etc/passwd",        0 },
+        /* dot segments and hidden files */
+        { "/.",                     0 },
+        { "/./a",                   0 },
+        { "/.hidden",               0 },
+        { "/a/.git/config",         0 },
+        { "/.env",                  0 },
+        /* not starting with '/' */
+        { "",                       0 },
+        { "a/b",                    0 },
+        { "../etc/passwd",          0 },
+    };
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        int got = path_is_safe(cases[i].path);
+        CHECK(got == cases[i].safe);
+        if (got != cases[i].safe) {
+            fprintf(stderr, "  (path was \"%s\")\n", cases[i].path);
+        }
+    }
 }
 
 static void test_within_root(void) {
