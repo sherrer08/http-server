@@ -1,4 +1,5 @@
 #include "path.h"
+#include <string.h>
 
 static int hex_value(char c) {
     if (c >= '0' && c <= '9') {
@@ -89,7 +90,15 @@ int path_is_safe(const char *path) {
 }
 
 int path_within_root(const char *root, const char *resolved) {
-    (void)root;
-    (void)resolved;
-    return 0;
+    size_t n = strlen(root);
+
+    if (strncmp(resolved, root, n) != 0) {
+        return 0;
+    }
+
+    if (resolved[n] == '\0' || resolved[n] == '/') {
+        return 1;
+    } else {
+        return 0;
+    }
 }

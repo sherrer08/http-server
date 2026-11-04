@@ -117,8 +117,31 @@ static void test_is_safe(void) {
 }
 
 static void test_within_root(void) {
-    CHECK(path_within_root("/srv/www", "/srv/www/index.html") == 1);
-    CHECK(path_within_root("/srv/www", "/etc/passwd") == 0);
+    static const struct {
+        const char *root;
+        const char *resolved;
+        int expected;
+    } cases[] = {
+        { "/srv/www", "/srv/www",               1 },
+        { "/srv/www", "/srv/www/index.html",    1 },
+        { "/srv/www", "/srv/www/a/b/c",         1 },
+        { "/srv/www", "/srv/www-secret",        0 },
+        { "/srv/www", "/srv/www-secret/key",    0 },
+        { "/srv/www", "/srv/wwwx/index.html",   0 },
+        { "/srv/www", "/srv/ww",                0 },
+        { "/srv/www", "/srv",                   0 },
+        { "/srv/www", "/etc/passwd",            0 },
+        { "/srv/www", "",                       0 },
+    };
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        int got = path_within_root(cases[i].root, cases[i].resolved);
+        CHECK(got == cases[i].expected);
+        if (got != cases[i].expected) {
+            fprintf(stderr, "  (resolved was \"%s\")\n", cases[i].resolved);
+        }
+    }
 }
 
 int main(void) {

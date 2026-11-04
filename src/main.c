@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <limits.h>
 #include <sys/stat.h>
+#include <string.h>
 #include "server.h"
 
 static void usage(const char *prog) {
@@ -43,6 +44,11 @@ int main(int argc, char *argv[]) {
 
     if (realpath(docroot_arg, root) == NULL) {
         perror(docroot_arg);
+        return EXIT_FAILURE;
+    }
+
+    if (strcmp(root, "/") == 0) {
+        fprintf(stderr, "refusing to serve the entire filesystem (/)\n");
         return EXIT_FAILURE;
     }
 
