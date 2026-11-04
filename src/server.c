@@ -1,11 +1,16 @@
 #include "server.h"
 #include "http.h"
+#include "path.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
 #include <string.h>
 #include <arpa/inet.h>
+#include <limits.h>
+#include <errno.h>
+#include <sys/stat.h>
 
 #define LISTEN_BACKLOG 16
 #define REQUEST_BUF_SIZE 4096
@@ -251,12 +256,95 @@ static void log_request(const char *peer, const struct http_request *req, int st
 }
 
 /*
+ * Maps an errno value from realpath or stat to the status to send:
+ * 404 for a missing file or path component, 403 for a permission problem,
+ * 414 for a path that's too long, and 500 for anything unexpected.
+*/
+static int status_for_errno(int err) {
+    switch (err) {
+        case ENOENT:
+        case ENOTDIR:
+            return 404;
+        case EACCES:
+            return 403;
+        case ENAMETOOLONG:
+            return 414;
+        default:
+            return 500;
+    }
+}
+
+/*
+ * Turns a request target into the real path of a file inside docroot.
+ * Decodes the target, rejects unsafe paths, resolves symbolic links and
+ * "//" with realpath, and checks the result is inside docroot. A directory
+ * resolves to its index.html.
+ * resolved must have room for PATH_MAX bytes. Returns 200 with the path in
+ * resolved, or the error status to send (resolved is then unspecified).
+*/
+static int resolve_target(const char *docroot, const char *target, char *resolved) {
+    char decoded[PATH_MAX];
+
+    switch (path_decode(target, decoded, sizeof(decoded))) {
+        case PATH_OK:
+            break;
+        case PATH_BAD:
+            return 400;
+        case PATH_TOO_LONG:
+            return 414;
+    }
+
+    if (!path_is_safe(decoded)) {
+        return 404;
+    }
+
+    char full[PATH_MAX];
+    int n = snprintf(full, sizeof(full), "%s%s", docroot, decoded);
+    if (n < 0 || (size_t)n >= sizeof(full)) {
+        return 414;
+    }
+
+    if (realpath(full, resolved) == NULL) {
+        return status_for_errno(errno);
+    }
+
+    if (!path_within_root(docroot, resolved)) {
+        return 404;
+    }
+
+    struct stat st;
+    if (stat(resolved, &st) == -1) {
+        return status_for_errno(errno);
+    }
+
+    if (S_ISDIR(st.st_mode)) {
+        char index[PATH_MAX];
+        n = snprintf(index, sizeof(index), "%s/index.html", resolved);
+        if (n < 0 || (size_t)n >= sizeof(index)) {
+            return 414;
+        }
+
+        if (realpath(index, resolved) == NULL) {
+            if (errno == ENOENT) {
+                return 403;
+            }
+            return status_for_errno(errno);
+        }
+
+        if (!path_within_root(docroot, resolved)) {
+            return 404;
+        }
+    }
+
+    return 200;
+}
+
+/*
  * Handles one connection: reads a request, sends a response, logs one line,
  * and closes client_fd. peer is the client's address, as "ip:port", used
  * only for logging. Every path closes client_fd before returning.
  */
 static void handle_client(int client_fd, const char *peer, const char *docroot) {
-    (void) docroot;
     char buf[REQUEST_BUF_SIZE];
     size_t header_len;
     struct http_request req;
@@ -285,6 +373,16 @@ static void handle_client(int client_fd, const char *peer, const char *docroot) 
                 send_error(client_fd, status, extra_headers);
                 break;
             }
+
+            char resolved[PATH_MAX];
+            status = resolve_target(docroot, req.target, resolved);
+
+            if (status != 200) {
+                send_error(client_fd, status, "");
+                break;
+            }
+
+            printf("  resolved to %s\n", resolved);
 
             char body[RESPONSE_BODY_SIZE];
             int body_len = snprintf(body, sizeof(body), "You requested GET %s\n", req.target);
