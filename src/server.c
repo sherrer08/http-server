@@ -1,6 +1,7 @@
 #include "server.h"
 #include "http.h"
 #include "path.h"
+#include "mime.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
@@ -139,23 +140,24 @@ static enum read_result read_request(int fd, char *buf, size_t cap, size_t *head
 /*
  * Sends a complete HTTP response on fd: status line, headers, and
  * (if send_body is 1) the body.
+ * content_type must be a constant from the server, never built from request data.
  * extra_headers is inserted before the blank line; each header must end in
  * "\r\n". Pass "" for none, never NULL, and never build it from request
  * data. Content-Length is always body_len, even when send_body is 0.
  * Returns 0 on success, or -1 if the response could not be built or sent.
 */
-static int send_response(int fd, int status, const char *extra_headers, const char *body, size_t body_len, int send_body) {
+static int send_response(int fd, int status, const char *content_type, const char *extra_headers, const char *body, size_t body_len, int send_body) {
     char header_buf[HEADER_BUFFER_SIZE];
 
     int header_len = snprintf(header_buf, sizeof(header_buf),
                               "HTTP/1.1 %d %s\r\n"
-                              "Content-Type: text/plain\r\n"
+                              "Content-Type: %s\r\n"
                               "Content-Length: %zu\r\n"
                               "X-Content-Type-Options: nosniff\r\n"
                               "Connection: close\r\n"
                               "%s"
                               "\r\n",
-                              status, http_reason_phrase(status),
+                              status, http_reason_phrase(status), content_type,
                               body_len, extra_headers);
 
     if (header_len < 0 || (size_t)header_len >= sizeof(header_buf)) {
@@ -189,7 +191,7 @@ static int send_error(int fd, int status, const char *extra_headers) {
         return -1;
     }
 
-    return send_response(fd, status, extra_headers, body, (size_t)body_len, 1);
+    return send_response(fd, status, "text/plain; charset=utf-8", extra_headers, body, (size_t)body_len, 1);
 }
 
 /*
@@ -424,7 +426,9 @@ static void handle_client(int client_fd, const char *peer, const char *docroot) 
                 break;
             }
 
-            printf("  opened %s (%lld bytes)\n", resolved, (long long)size);
+            const char *type = mime_type_for_path(resolved);
+
+            printf("  opened %s (%lld bytes, %s)\n", resolved, (long long)size, type);
 
             char body[RESPONSE_BODY_SIZE];
             int body_len = snprintf(body, sizeof(body), "You requested GET %s\n", req.target);
@@ -438,7 +442,7 @@ static void handle_client(int client_fd, const char *peer, const char *docroot) 
 
             status = 200;
             int send_body = (req.method == HTTP_METHOD_GET);
-            send_response(client_fd, status, "", body, (size_t)body_len, send_body);
+            send_response(client_fd, status, "text/plain; charset=utf-8", "", body, (size_t)body_len, send_body);
 
             close(fd);
 

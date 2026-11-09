@@ -1,0 +1,33 @@
+body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    max-width: 40rem;
+    margin: 3rem auto;
+    padding: 0 1rem;
+    line-height: 1.6;
+    color: #222;
+    background: #f7f7f5;
+}
+
+h1 {
+    color: #1f6f5c;
+}
+
+a {
+    color: #1f6f5c;
+}
+
+a:hover {
+    color: #14473b;
+}
+
+code {
+    font-family: ui-monospace, "DejaVu Sans Mono", monospace;
+    background: #ebebe6;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+}
+
+.logo {
+    display: block;
+    margin-bottom: 1rem;
+}
