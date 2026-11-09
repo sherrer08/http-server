@@ -2,7 +2,7 @@ CC = gcc
 
 CFLAGS = -Wall -Wextra -std=c11 -g -MMD -MP -Wshadow
 
-CPPFLAGS = -Iinclude -D_POSIX_C_SOURCE=200809L
+CPPFLAGS = -Iinclude -D_XOPEN_SOURCE=700
 
 LDFLAGS = 
 
@@ -16,18 +16,20 @@ LIB_OBJS = $(filter-out build/main.o, $(OBJS))
 
 LIB_SRCS = $(filter-out src/main.c, $(SRCS))
 
-TEST_NAME = test_http
+TEST_SRCS = $(wildcard tests/test_*.c)
 
-TEST_OBJS = build/$(TEST_NAME).o
+TEST_OBJS = $(patsubst tests/%.c,build/%.o,$(TEST_SRCS))
 
-.PHONY: all clean run test test-asan smoke
+TEST_BINS = $(patsubst tests/%.c,build/%,$(TEST_SRCS))
 
-all: build/server build/$(TEST_NAME)
+.PHONY: all clean run run-asan test test-asan smoke smoke-asan print
+
+all: build/server $(TEST_BINS)
 
 build/server: $(OBJS)
 	$(CC) $(LDFLAGS) $^ -o $@
 
-build/$(TEST_NAME): build/$(TEST_NAME).o $(LIB_OBJS)
+$(TEST_BINS): build/%: build/%.o $(LIB_OBJS)
 	$(CC) $(LDFLAGS) $^ -o $@
 
 build/%.o: src/%.c
@@ -44,13 +46,17 @@ clean:
 run: build/server
 	./build/server
 
-test: build/$(TEST_NAME)
-	./build/$(TEST_NAME)
+test: $(TEST_BINS)
+	@for t in $(TEST_BINS); do echo "== $$t"; ./$$t || exit 1; done
 
 test-asan: 
 	@mkdir -p build
-	$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) tests/$(TEST_NAME).c $(LIB_SRCS) $(LDFLAGS) -o build/$(TEST_NAME)_asan
-	./build/$(TEST_NAME)_asan
+	@for src in $(TEST_SRCS); do \
+		name=$$(basename $$src .c); \
+		echo "== $$name (sanitizers)"; \
+		$(CC) $(CPPFLAGS) $(CFLAGS) $(SAN_FLAGS) $$src $(LIB_SRCS) $(LDFLAGS) -o build/$${name}_asan || exit 1; \
+		./build/$${name}_asan || exit 1; \
+	done
 
 run-asan:
 	@mkdir -p build
@@ -68,6 +74,5 @@ smoke-asan:
 -include $(OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
 print:
-	@echo "OBJS: $(OBJS)"
-	@echo "LIB_OBJS: $(LIB_OBJS)"
-	@echo "LIB_SRCS: $(LIB_SRCS)"
+	@echo "TEST_SRCS: $(TEST_SRCS)"
+	@echo "TEST_BINS: $(TEST_BINS)"

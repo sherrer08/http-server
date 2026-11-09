@@ -1,9 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
+#include <sys/stat.h>
+#include <string.h>
+#include <signal.h>
 #include "server.h"
 
 static void usage(const char *prog) {
-    fprintf(stderr, "usage: %s [port]\n", prog);
+    fprintf(stderr, "usage: %s [port] [docroot]\n", prog);
 }
 
 static int parse_port(const char *text, int *port) {
@@ -20,19 +24,53 @@ static int parse_port(const char *text, int *port) {
 }
 
 int main(int argc, char *argv[]) {
-    int port;
+    int port = 8080;
+    const char *docroot_arg = "www";
 
-    if (argc == 1) {
-        port = 8080;
-    } else if (argc == 2) {
-        if (parse_port(argv[1], &port) != 0) {
-            usage(argv[0]);
-            return EXIT_FAILURE;
-        }
-    } else {
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        perror("signal");
+        return EXIT_FAILURE;
+    }
+
+    if (argc > 3) {
         usage(argv[0]);
         return EXIT_FAILURE;
     }
+    
+    if (argc >= 2 && parse_port(argv[1], &port) != 0) {
+        usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    if (argc == 3) {
+        docroot_arg = argv[2];
+    }
+
+    char root[PATH_MAX];
+
+    if (realpath(docroot_arg, root) == NULL) {
+        perror(docroot_arg);
+        return EXIT_FAILURE;
+    }
+
+    if (strcmp(root, "/") == 0) {
+        fprintf(stderr, "refusing to serve the entire filesystem (/)\n");
+        return EXIT_FAILURE;
+    }
+
+    struct stat st;
+
+    if (stat(root, &st) == -1) {
+        perror(root);
+        return EXIT_FAILURE;
+    }
+
+    if (!S_ISDIR(st.st_mode)) {
+        fprintf(stderr, "%s: not a directory\n", root);
+        return EXIT_FAILURE;
+    }
+
+    printf("serving %s on port %d\n", root, port);
 
     int listen_fd = server_listen(port);
 
@@ -40,9 +78,7 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
-    printf("listening on port %d\n", port);
-
-    server_run(listen_fd);
+    server_run(listen_fd, root);
 
     /* listen_fd should be closed once server_run can return */
     return EXIT_SUCCESS;

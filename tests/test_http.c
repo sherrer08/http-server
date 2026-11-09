@@ -3,22 +3,10 @@
 #include <string.h>
 #include <stdint.h>
 #include "http.h"
+#include "check.h"
 
 _Static_assert(SIZE_MAX == 18446744073709551615ULL,
                "Content-Length boundary tests assume a 64-bit size_t");
-
-static int checks_run = 0;
-static int checks_failed = 0;
-
-#define CHECK(cond)                                                 \
-    do {                                                            \
-        checks_run++;                                               \
-        if (!(cond)) {                                              \
-            checks_failed++;                                        \
-            fprintf(stderr, "%s:%d: CHECK failed: %s\n",            \
-                    __FILE__, __LINE__, #cond);                     \
-        }                                                           \
-    } while (0)
 
 static enum http_parse_result parse_len(const char *text, size_t len, char *buf, size_t buf_size, struct http_request *req) {
     if (len + 1 > buf_size) {
@@ -774,6 +762,8 @@ static void test_status_codes(void) {
     } phrases[] = {
         { 200, "OK" },
         { 400, "Bad Request" },
+        { 403, "Forbidden" },
+        { 404, "Not Found" },
         { 405, "Method Not Allowed" },
         { 413, "Content Too Large" },
         { 414, "URI Too Long" },
@@ -781,7 +771,7 @@ static void test_status_codes(void) {
         { 500, "Internal Server Error" },
         { 501, "Not Implemented" },
         { 505, "HTTP Version Not Supported" },
-        { 404, "Unknown" },
+        { 418, "Unknown" },
         { 0,   "Unknown" },
         { -1,  "Unknown" },
     };
@@ -835,11 +825,5 @@ int main(void) {
     test_transfer_encoding();
     test_status_codes();
 
-    printf("%d checks, %d failed\n", checks_run, checks_failed);
-
-    if (checks_failed > 0) {
-        return EXIT_FAILURE;
-    } else {
-        return EXIT_SUCCESS;
-    }
+    return CHECK_SUMMARY();
 }

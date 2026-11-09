@@ -13,13 +13,14 @@ int server_listen(int port);
 /*
  * Accepts and serves clients on listen_fd, one at a time. For each
  * connection: reads the request's header section, parses and validates it,
- * sends the matching response (200 for GET and HEAD, or an error status),
- * logs one line, and closes the connection. listen_fd must come from
- * server_listen.
+ * and, for GET and HEAD, resolves the target to a regular file inside
+ * docroot and sends it (or sends the matching error status), then logs one
+ * line and closes the connection. docroot must be an absolute, resolved
+ * path to a directory, valid for as long as the server runs.
  * Errors on a single connection are answered or logged, and the server
  * moves on to the next client.
  * Does not return. Does not close listen_fd.
  */
-void server_run(int listen_fd);
+void server_run(int listen_fd, const char *docroot);
 
 #endif
