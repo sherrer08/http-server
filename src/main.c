@@ -3,6 +3,7 @@
 #include <limits.h>
 #include <sys/stat.h>
 #include <string.h>
+#include <signal.h>
 #include "server.h"
 
 static void usage(const char *prog) {
@@ -25,6 +26,11 @@ static int parse_port(const char *text, int *port) {
 int main(int argc, char *argv[]) {
     int port = 8080;
     const char *docroot_arg = "www";
+
+    if (signal(SIGPIPE, SIG_IGN) == SIG_ERR) {
+        perror("signal");
+        return EXIT_FAILURE;
+    }
 
     if (argc > 3) {
         usage(argv[0]);
