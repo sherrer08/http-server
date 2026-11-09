@@ -34,13 +34,18 @@ check() {
     fi
 }
 
-check "GET"          200 "$URL/hello"
-check "HEAD"         200 -I "$URL/hello"
-check "HTTP/1.0"     200 --http1.0 "$URL/"
-check "POST"         405 -X POST "$URL/"
-check "unknown"      501 -X BREW "$URL/"
-check "no Host"      400 -H 'Host:' "$URL/"
-check "long target"  414 "$URL/$(head -c 1100 /dev/zero | tr '\0' a)"
+check "GET file"      200 "$URL/about.html"
+check "GET /"         200 "$URL/"
+check "GET dir"       200 "$URL/blog/"
+check "HEAD"          200 -I "$URL/about.html"
+check "HTTP/1.0"      200 --http1.0 "$URL/"
+check "missing"       404 "$URL/missing.html"
+check "traversal"     404 --path-as-is "$URL/../etc/passwd"
+check "encoded trav"  404 "$URL/%2e%2e/%2e%2e/etc/passwd"
+check "POST"          405 -X POST "$URL/"
+check "unknown"       501 -X BREW "$URL/"
+check "no Host"       400 -H 'Host:' "$URL/"
+check "long target"   414 "$URL/$(head -c 1100 /dev/zero | tr '\0' a)"
 
 echo "$failures failed"
 [ "$failures" -eq 0 ]
