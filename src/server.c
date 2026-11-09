@@ -11,6 +11,7 @@
 #include <limits.h>
 #include <errno.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 #define LISTEN_BACKLOG 16
 #define REQUEST_BUF_SIZE 4096
@@ -256,7 +257,7 @@ static void log_request(const char *peer, const struct http_request *req, int st
 }
 
 /*
- * Maps an errno value from realpath or stat to the status to send:
+ * Maps an errno value from realpath, stat, or open to the status to send:
  * 404 for a missing file or path component, 403 for a permission problem,
  * 414 for a path that's too long, and 500 for anything unexpected.
 */
@@ -264,6 +265,7 @@ static int status_for_errno(int err) {
     switch (err) {
         case ENOENT:
         case ENOTDIR:
+        case ELOOP:
             return 404;
         case EACCES:
             return 403;
@@ -340,6 +342,37 @@ static int resolve_target(const char *docroot, const char *target, char *resolve
 }
 
 /*
+ * Opens the file at path (from resolve_target) for sending, and checks it
+ * through the open descriptor: it must be a regular file. Does not follow a
+ * symbolic link in the last part of the path, and does not block on named
+ * pipes. Returns 200, with the open descriptor in *fd_out and the file's
+ * size in *size_out, or the error status to send (nothing is left open).
+ * On 200, the caller must close *fd_out.
+*/
+static int open_file(const char *path, int *fd_out, off_t *size_out) {
+    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+
+    if (fd == -1) {
+        return status_for_errno(errno);
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) == -1) {
+        close(fd);
+        return 500;
+    }
+
+    if (!S_ISREG(st.st_mode)) {
+        close(fd);
+        return 403;
+    }
+
+    *fd_out = fd;
+    *size_out = st.st_size;
+    return 200;
+}
+
+/*
  * Handles one connection: reads a request, sends a response, logs one line,
  * and closes client_fd. peer is the client's address, as "ip:port", used
  * only for logging. Every path closes client_fd before returning.
@@ -382,12 +415,22 @@ static void handle_client(int client_fd, const char *peer, const char *docroot) 
                 break;
             }
 
-            printf("  resolved to %s\n", resolved);
+            int fd;
+            off_t size;
+            status = open_file(resolved, &fd, &size);
+
+            if (status != 200) {
+                send_error(client_fd, status, "");
+                break;
+            }
+
+            printf("  opened %s (%lld bytes)\n", resolved, (long long)size);
 
             char body[RESPONSE_BODY_SIZE];
             int body_len = snprintf(body, sizeof(body), "You requested GET %s\n", req.target);
 
             if (body_len < 0 || (size_t)body_len >= sizeof(body)) {
+                close(fd);
                 status = 500;
                 send_error(client_fd, status, "");
                 break;
@@ -396,6 +439,8 @@ static void handle_client(int client_fd, const char *peer, const char *docroot) 
             status = 200;
             int send_body = (req.method == HTTP_METHOD_GET);
             send_response(client_fd, status, "", body, (size_t)body_len, send_body);
+
+            close(fd);
 
             break;
         }
