@@ -861,6 +861,52 @@ static void test_connection_has(void) {
     }
 }
 
+static void test_wants_keep_alive(void) {
+    static const struct {
+        const char *text;
+        int expected;
+    } cases[] = {
+        /* HTTP/1.1: open unless "close" */
+        { "GET / HTTP/1.1\r\nHost: x\r\n\r\n",                              1 },
+        { "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n",         0 },
+        { "GET / HTTP/1.1\r\nHost: x\r\nConnection: Close\r\n\r\n",         0 },
+        { "GET / HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n",    1 },
+        { "GET / HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\n\r\n",       1 },
+        { "GET / HTTP/1.1\r\nHost: x\r\nConnection: closed\r\n\r\n",        1 },
+        /* HTTP/1.0: closed unless "keep-alive" */
+        { "GET / HTTP/1.0\r\n\r\n",                                         0 },
+        { "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n",               1 },
+        { "GET / HTTP/1.0\r\nConnection: Keep-Alive\r\n\r\n",               1 },
+        { "GET / HTTP/1.0\r\nConnection: close\r\n\r\n",                    0 },
+        /* "close" always wins */
+        { "GET / HTTP/1.1\r\nHost: x\r\nConnection: keep-alive, close\r\n\r\n", 0 },
+        { "GET / HTTP/1.0\r\nConnection: keep-alive, close\r\n\r\n",        0 },
+        { "GET / HTTP/1.0\r\n"
+          "Connection: keep-alive\r\n"
+          "Connection: close\r\n"
+          "\r\n",                                                           0 },
+    };
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        char buf[1024];
+        struct http_request req;
+        enum http_parse_result result = parse(cases[i].text, buf, sizeof(buf), &req);
+
+        CHECK(result == HTTP_PARSE_OK);
+        if (result != HTTP_PARSE_OK) {
+            fprintf(stderr, "  (case %zu did not parse)\n", i);
+            continue;
+        }
+
+        int got = http_wants_keep_alive(&req);
+        CHECK(got == cases[i].expected);
+        if (got != cases[i].expected) {
+            fprintf(stderr, "  (case %zu)\n", i);
+        }
+    }
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -880,6 +926,7 @@ int main(void) {
     test_transfer_encoding();
     test_status_codes();
     test_connection_has();
+    test_wants_keep_alive();
 
     return CHECK_SUMMARY();
 }

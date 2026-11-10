@@ -345,6 +345,18 @@ int http_connection_has(const struct http_request *req, const char *option) {
     return 0;
 }
 
+int http_wants_keep_alive(const struct http_request *req) {
+    if (http_connection_has(req, "close")) {
+        return 0;
+    }
+
+    if (req->version_minor == 1) {
+        return 1;
+    }
+
+    return http_connection_has(req, "keep-alive");
+}
+
 const char *http_get_header(const struct http_request *req, const char *name) {
     for (size_t i = 0; i < req->header_count; i++) {
         if (strcasecmp(req->headers[i].name, name) == 0) {

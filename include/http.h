@@ -73,6 +73,15 @@ enum http_parse_result http_parse_request(char *buf, size_t len, struct http_req
 int http_connection_has(const struct http_request *req, const char *option);
 
 /*
+ * Returns 1 if the client asked to keep the connection open after this
+ * request, and 0 otherwise. HTTP/1.1 stays open unless a Connection header
+ * lists "close"; HTTP/1.0 closes unless a Connection header lists
+ * "keep-alive". "close" always wins.
+ * This is only the client;s preference: the server may still close
+*/
+int http_wants_keep_alive(const struct http_request *req);
+
+/*
  * Returns the value of the first header named name (compared
  * case-insensitively), or NULL if there is none. The returned string
  * points into the same buffer as req and has the same lifetime.
