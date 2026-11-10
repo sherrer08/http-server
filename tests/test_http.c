@@ -806,6 +806,61 @@ static void test_status_codes(void) {
     }
 }
 
+static void test_connection_has(void) {
+    static const struct {
+        const char *text;
+        const char *option;
+        int expected;
+    } cases[] = {
+        { "GET / HTTP/1.0\r\n\r\n",                                     "close", 0 },
+        { "GET / HTTP/1.0\r\nConnection: close\r\n\r\n",                "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection: Close\r\n\r\n",                "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection: CLOSE\r\n\r\n",                "close", 1 },
+        { "GET / HTTP/1.0\r\nconnection: close\r\n\r\n",                "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n",           "close", 0 },
+        { "GET / HTTP/1.0\r\nConnection: keep-alive, close\r\n\r\n",    "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection: close, Upgrade\r\n\r\n",       "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection: Upgrade,close\r\n\r\n",        "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection:    close   \r\n\r\n",          "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection: keep-alive ,  close , TE\r\n\r\n", "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection: keep-alive,\tclose\r\n\r\n",   "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection: ,,close,,\r\n\r\n",            "close", 1 },
+        { "GET / HTTP/1.0\r\nConnection:\r\n\r\n",                      "close", 0 },
+        { "GET / HTTP/1.0\r\nConnection: ,\r\n\r\n",                    "close", 0 },
+        { "GET / HTTP/1.0\r\nConnection: closed\r\n\r\n",               "close", 0 },
+        { "GET / HTTP/1.0\r\nConnection: xclose\r\n\r\n",               "close", 0 },
+        { "GET / HTTP/1.0\r\nConnection: close-ish\r\n\r\n",            "close", 0 },
+        { "GET / HTTP/1.0\r\nConnection: clo se\r\n\r\n",               "close", 0 },
+        { "GET / HTTP/1.0\r\nX-Connection: close\r\n\r\n",              "close", 0 },
+        { "GET / HTTP/1.0\r\n"
+          "Connection: keep-alive\r\n"
+          "Connection: close\r\n"
+          "\r\n",                                                       "close", 1 },
+        /* the option is a parameter */
+        { "GET / HTTP/1.0\r\nConnection: Keep-Alive\r\n\r\n",           "keep-alive", 1 },
+        { "GET / HTTP/1.0\r\nConnection: close\r\n\r\n",                "keep-alive", 0 },
+    };
+    const size_t count = sizeof(cases) / sizeof(cases[0]);
+
+    for (size_t i = 0; i < count; i++) {
+        char buf[1024];
+        struct http_request req;
+        enum http_parse_result result = parse(cases[i].text, buf, sizeof(buf), &req);
+
+        CHECK(result == HTTP_PARSE_OK);
+        if (result != HTTP_PARSE_OK) {
+            fprintf(stderr, "  (case %zu did not parse)\n", i);
+            continue;
+        }
+
+        int got = http_connection_has(&req, cases[i].option);
+        CHECK(got == cases[i].expected);
+        if (got != cases[i].expected) {
+            fprintf(stderr, "  (case %zu, option \"%s\")\n", i, cases[i].option);
+        }
+    }
+}
+
 int main(void) {
     test_minimal_request();
     test_garbage();
@@ -824,6 +879,7 @@ int main(void) {
     test_content_length();
     test_transfer_encoding();
     test_status_codes();
+    test_connection_has();
 
     return CHECK_SUMMARY();
 }

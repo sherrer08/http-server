@@ -64,6 +64,15 @@ struct http_request {
 enum http_parse_result http_parse_request(char *buf, size_t len, struct http_request *req);
 
 /*
+ * Returns 1 if any Connection header in req lists option, and 0 otherwise.
+ * A Connection header's value is a comma-separated list; each item is
+ * compared with option case-insensitively, ignoring spaces and tabs around
+ * it, and must match in full ("close" does not match "closed").
+ * Every Connection header in the request is checked.
+ */
+int http_connection_has(const struct http_request *req, const char *option);
+
+/*
  * Returns the value of the first header named name (compared
  * case-insensitively), or NULL if there is none. The returned string
  * points into the same buffer as req and has the same lifetime.

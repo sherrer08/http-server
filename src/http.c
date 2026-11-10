@@ -302,6 +302,49 @@ enum http_parse_result http_parse_request(char *buf, size_t len, struct http_req
     return HTTP_PARSE_OK;
 }
 
+
+int http_connection_has(const struct http_request *req, const char *option) {
+    size_t option_len = strlen(option);
+
+    for (size_t i = 0; i < req->header_count; i++) {
+        if (strcasecmp(req->headers[i].name, "Connection") != 0) {
+            continue;
+        }
+
+        const char *p = req->headers[i].value;
+
+        while (*p != '\0') {
+            while (*p == ' ' || *p == '\t' || *p == ',') {
+                p++;
+            }
+
+            if (*p == '\0') {
+                break;
+            }
+
+            const char *start = p;
+
+            while (*p != '\0' && *p != ',') {
+                p++;
+            }
+
+            const char *end = p;
+
+            while (end > start && (end[-1] == ' ' || end[-1] == '\t')) {
+                end--;
+            }
+
+            size_t len = (size_t)(end - start);
+
+            if (len == option_len && strncasecmp(start, option, len) == 0) {
+                return 1;
+            }
+        }
+    }
+
+    return 0;
+}
+
 const char *http_get_header(const struct http_request *req, const char *name) {
     for (size_t i = 0; i < req->header_count; i++) {
         if (strcasecmp(req->headers[i].name, name) == 0) {

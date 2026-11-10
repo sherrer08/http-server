@@ -1,6 +1,6 @@
 CC = gcc
 
-CFLAGS = -Wall -Wextra -std=c11 -g -MMD -MP -Wshadow
+CFLAGS = -Wall -Wextra -std=c11 -g -MMD -MP -Wshadow -Wmissing-prototypes
 
 CPPFLAGS = -Iinclude -D_XOPEN_SOURCE=700
 
