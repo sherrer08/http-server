@@ -27,6 +27,13 @@ enum read_result {
     READ_BAD
 };
 
+struct connection {
+    int fd;                      /* the client socket */
+    const char *peer;            /* "ip:port", for logging */
+    char buf[REQUEST_BUF_SIZE];  /* bytes received, not yet handled */
+    size_t len;                  /* how many bytes of buf are in use */
+};
+
 int server_listen(int port) {
     int fd = socket(AF_INET, SOCK_STREAM, 0);
 
@@ -96,7 +103,7 @@ static int send_all(int fd, const char *data, size_t len) {
 }
 
 /*
- * Sends size bytes of the file in_fd, startign from its beginning, to the
+ * Sends size bytes of the file in_fd, starting from its beginning, to the
  * socket out_fd, calling sendfile() as many times as needed.
  * Returns 0 if every byte was sent, or -1 on error (errno is set), including
  * when the file turns out shorter than size.
@@ -121,24 +128,31 @@ static int sendfile_all(int out_fd, int in_fd, off_t size) {
 }
 
 /*
- * Reads from fd until buf holds a complete HTTP header section, ending in
- * "\r\n\r\n". buf has room for cap bytes; one byte is always kept free so
- * the data can be '\0'-terminated.
+ * Reads from conn's socket until conn->buf holds a complete HTTP header
+ * section, ending in "\r\n\r\n". Bytes already in the buffer (left over
+ * from an earlier request) are checked first, so recv is only called when
+ * they don't already hold a complete header section. The buffer is kept
+ * '\0'-terminated, with one byte always free for the terminator.
  * On READ_OK, *header_len is the length of the header section, including
- * the "\r\n\r\n". Any bytes after it are left in buf, unused.
- * Returns READ_TOO_LARGE if buf fills up without a complete header section,
- * READ_BAD if a '\0' byte arrives, READ_CLOSED if the client closes first,
- * and READ_ERROR if recv fails (the reason is printed).
+ * the "\r\n\r\n"; any bytes after it are the start of the next request.
+ * Returns READ_TOO_LARGE if the buffer fills up without a complete header
+ * section, READ_BAD if a '\0' byte arrives, READ_CLOSED if the client
+ * closes first (conn->len is 0 if it closed between requests), and
+ * READ_ERROR if recv fails (the reason is printed).
  */
-static enum read_result read_request(int fd, char *buf, size_t cap, size_t *header_len) {
-    size_t received = 0;
-
+static enum read_result read_request(struct connection *conn, size_t *header_len) {
     for (;;) {
-        if (received == cap - 1) {
+        char *end = strstr(conn->buf, "\r\n\r\n");
+        if (end != NULL) {
+            *header_len = (size_t)(end - conn->buf) + 4;
+            return READ_OK;
+        }
+
+        if (conn->len == REQUEST_BUF_SIZE - 1) {
             return READ_TOO_LARGE;
         }
 
-        ssize_t n = recv(fd, buf + received, cap - 1 - received, 0);
+        ssize_t n = recv(conn->fd, conn->buf + conn->len, REQUEST_BUF_SIZE - 1 - conn->len, 0);
 
         if (n == 0) {
             return READ_CLOSED;
@@ -146,31 +160,38 @@ static enum read_result read_request(int fd, char *buf, size_t cap, size_t *head
             perror("recv");
             return READ_ERROR;
         } else {
-            if (memchr(buf + received, '\0', (size_t)n) != NULL) {
+            if (memchr(conn->buf + conn->len, '\0', (size_t)n) != NULL) {
                 return READ_BAD;
             }
         }
 
-        received += (size_t)n;
-        buf[received] = '\0';
-
-        char *end = strstr(buf, "\r\n\r\n");
-        if (end != NULL) {
-            *header_len = (size_t)(end - buf) + 4;
-            return READ_OK;
-        }
+        conn->len += (size_t)n;
+        conn->buf[conn->len] = '\0';
     }
 }
 
 /*
- * Sends the status line and headers of an HTTP response onf fd, ending with
- * the blank line. Content-Length is content-length; the caller must then
- * send exactly that many body bytes (or more, for HEAD).
- * content_type mus be a constant from the server, never built from
+ * Removes a handled request's header_len bytes from the front of
+ * conn->buf, moving any bytes after it (the start of the next request) to
+ * the front. Keeps the buffer '\0'-terminated.
+*/
+static void consume_request(struct connection *conn, size_t header_len) {
+    size_t leftover = conn->len - header_len;
+
+    memmove(conn->buf, conn->buf + header_len, leftover);
+    conn->len = leftover;
+    conn->buf[conn->len] = '\0';
+}
+
+/*
+ * Sends the status line and headers of an HTTP response on fd, ending with
+ * the blank line. Content-Length is content_length; the caller must then
+ * send exactly that many body bytes (or none, for HEAD).
+ * content_type must be a constant from the server, never built from
  * request data. extra_headers is inserted before the blank line; each
- * header must end in "\r\n". Paa "" for none, never NULL, and never build
+ * header must end in "\r\n". Pass "" for none, never NULL, and never build
  * it from request data.
- * Returns 0 on success, or -1 if the headers could not be build or sent.
+ * Returns 0 on success, or -1 if the headers could not be built or sent.
 */
 static int send_headers(int fd, int status, const char *content_type, const char *extra_headers, long long content_length) {
     char header_buf[HEADER_BUFFER_SIZE];
@@ -196,7 +217,7 @@ static int send_headers(int fd, int status, const char *content_type, const char
 
 /*
  * Sends a complete HTTP response on fd whose body is in memory: the
- * headers (see send_headres), then body if send_body is 1. Content-Length
+ * headers (see send_headers), then body if send_body is 1. Content-Length
  * is always body_len, even when send_body is 0.
  * Returns 0 on success, or -1 on failure.
 */
@@ -415,87 +436,129 @@ static int open_file(const char *path, int *fd_out, off_t *size_out) {
 }
 
 /*
- * Handles one connection: reads a request, sends a response, logs one line,
- * and closes client_fd. peer is the client's address, as "ip:port", used
- * only for logging. Every path closes client_fd before returning.
- */
-static void handle_client(int client_fd, const char *peer, const char *docroot) {
-    char buf[REQUEST_BUF_SIZE];
-    size_t header_len;
-    struct http_request req;
-    int parsed = 0;
-    int status = 0;
-    int incomplete = 0;
+ * Parses the request in conn->buf (header_len bytes, '\0'-terminated by
+ * the caller) and sends the response: an error, or the requested file.
+ * Fills in *req and sets *parsed to 1 if the request parsed, and sets
+ * *incomplete to 1 if a file's body could not be fully sent.
+ * Returns the status sent.
+*/
+static int respond(struct connection *conn, size_t header_len, const char *docroot, struct http_request *req, int *parsed, int *incomplete) {
+    enum http_parse_result result = http_parse_request(conn->buf, header_len, req);
 
-    enum read_result rr = read_request(client_fd, buf, sizeof(buf), &header_len);
-
-    switch (rr) {
-        case READ_OK: {
-            buf[header_len] = '\0';
-
-            enum http_parse_result result = http_parse_request(buf, header_len, &req);
-
-            if (result != HTTP_PARSE_OK) {
-                status = http_status_for_parse_result(result);
-                send_error(client_fd, status, "");
-                break;
-            }
-
-            const char *extra_headers = "";
-            parsed = 1;
-            status = decide_status(&req, &extra_headers);
-
-            if (status != 200) {
-                send_error(client_fd, status, extra_headers);
-                break;
-            }
-
-            char resolved[PATH_MAX];
-            status = resolve_target(docroot, req.target, resolved);
-
-            if (status != 200) {
-                send_error(client_fd, status, "");
-                break;
-            }
-
-            int fd;
-            off_t size;
-            status = open_file(resolved, &fd, &size);
-
-            if (status != 200) {
-                send_error(client_fd, status, "");
-                break;
-            }
-
-            const char *type = mime_type_for_path(resolved);
-            status = 200;
-
-            if (send_headers(client_fd, 200, type, "", (long long)size) == 0 && req.method == HTTP_METHOD_GET) {
-                if (sendfile_all(client_fd, fd, size) == -1) {
-                incomplete = 1;
-            }
-            }
-
-            close(fd);
-            break;
-        }
-        case READ_TOO_LARGE:
-            status = 431;
-            send_error(client_fd, status, "");
-            break;
-        case READ_BAD:
-            status = 400;
-            send_error(client_fd, status, "");
-            break;
-        case READ_CLOSED:
-        case READ_ERROR:
-            break;
+    if (result != HTTP_PARSE_OK) {
+        int status = http_status_for_parse_result(result);
+        send_error(conn->fd, status, "");
+        return status;
     }
 
-    log_request(peer, parsed ? &req : NULL, status, incomplete);
-    
-    close(client_fd);
+    *parsed = 1;
+
+    const char *extra_headers = "";
+    int status = decide_status(req, &extra_headers);
+
+    if (status != 200) {
+        send_error(conn->fd, status, extra_headers);
+        return status;
+    }
+
+    char resolved[PATH_MAX];
+    status = resolve_target(docroot, req->target, resolved);
+
+    if (status != 200) {
+        send_error(conn->fd, status, "");
+        return status;
+    }
+
+    int fd;
+    off_t size;
+    status = open_file(resolved, &fd, &size);
+
+    if (status != 200) {
+        send_error(conn->fd, status, "");
+        return status;
+    }
+
+    const char *type = mime_type_for_path(resolved);
+
+    if (send_headers(conn->fd, status, type, "", (long long)size) == 0 && req->method == HTTP_METHOD_GET) {
+        if (sendfile_all(conn->fd, fd, size) == -1) {
+            *incomplete = 1;
+        }
+    }
+
+    close(fd);
+    return status;
 }
+
+/*
+* Handles the request whose header section is the first header_len bytes
+* of conn->buf: responds to it, and logs one line. Temporarily writes a
+* '\0' after the header section for the parser, and restores the
+* original byte (the start of any pipelined request) before returning.
+*/
+static void handle_request(struct connection *conn, size_t header_len, const char *docroot) {
+    struct http_request req;
+    int parsed = 0;
+    int incomplete = 0;
+
+    char saved = conn->buf[header_len];
+    conn->buf[header_len] = '\0';
+
+    int status = respond(conn, header_len, docroot, &req, &parsed, &incomplete);
+
+    log_request(conn->peer, parsed ? &req : NULL, status, incomplete);
+
+    conn->buf[header_len] = saved;
+}
+
+/*
+ * Handles one connection: reads requests from client_fd and responds to
+ * each, logging one line per request. Bytes after a request's header
+ * section are kept for the next request. peer is the client's address,
+ * as "ip:port", used only for logging. Closes client_fd before returning.
+ */
+static void handle_connection(int client_fd, const char *peer, const char *docroot) {
+    struct connection conn;
+    conn.fd = client_fd;
+    conn.peer = peer;
+    conn.len = 0;
+    conn.buf[0] = '\0';
+
+    for (;;) {
+        size_t header_len;
+        enum read_result rr = read_request(&conn, &header_len);
+
+        if (rr != READ_OK) {
+            int status = 0;
+
+            switch (rr) {
+                case READ_TOO_LARGE:
+                    status = 431;
+                    send_error(conn.fd, status, "");
+                    break;
+                case READ_BAD:
+                    status = 400;
+                    send_error(conn.fd, status, "");
+                    break;
+                case READ_CLOSED:
+                case READ_ERROR:
+                case READ_OK:
+                    break;
+            }
+
+            log_request(conn.peer, NULL, status, 0);
+            break;
+        }
+
+        handle_request(&conn, header_len, docroot);
+        consume_request(&conn, header_len);
+
+        break;
+    }
+
+    close(conn.fd);
+}
+
 
 void server_run(int listen_fd, const char *docroot) {
     struct sockaddr_in client_addr;
@@ -516,6 +579,6 @@ void server_run(int listen_fd, const char *docroot) {
         char peer[INET_ADDRSTRLEN + 8];
         snprintf(peer, sizeof(peer), "%s:%d", ip, ntohs(client_addr.sin_port));
 
-        handle_client(client_fd, peer, docroot);
+        handle_connection(client_fd, peer, docroot);
     }
 }
