@@ -18,6 +18,7 @@
 #define LISTEN_BACKLOG 16
 #define REQUEST_BUF_SIZE 4096
 #define HEADER_BUFFER_SIZE 512
+#define MAX_REQUESTS_PER_CONNECTION 100
 
 enum read_result {
     READ_OK,
@@ -190,10 +191,11 @@ static void consume_request(struct connection *conn, size_t header_len) {
  * content_type must be a constant from the server, never built from
  * request data. extra_headers is inserted before the blank line; each
  * header must end in "\r\n". Pass "" for none, never NULL, and never build
- * it from request data.
+ * it from request data. The Connection header says keep-alive if keep_alive
+ * is 1, and close otherwise.
  * Returns 0 on success, or -1 if the headers could not be built or sent.
 */
-static int send_headers(int fd, int status, const char *content_type, const char *extra_headers, long long content_length) {
+static int send_headers(int fd, int status, const char *content_type, const char *extra_headers, long long content_length, int keep_alive) {
     char header_buf[HEADER_BUFFER_SIZE];
 
     int header_len = snprintf(header_buf, sizeof(header_buf),
@@ -201,11 +203,11 @@ static int send_headers(int fd, int status, const char *content_type, const char
                               "Content-Type: %s\r\n"
                               "Content-Length: %lld\r\n"
                               "X-Content-Type-Options: nosniff\r\n"
-                              "Connection: close\r\n"
+                              "Connection: %s\r\n"
                               "%s"
                               "\r\n",
                               status, http_reason_phrase(status), content_type,
-                              content_length, extra_headers);
+                              content_length, keep_alive ? "keep-alive" : "close", extra_headers);
 
     if (header_len < 0 || (size_t)header_len >= sizeof(header_buf)) {
         fprintf(stderr, "response headers too long\n");
@@ -218,11 +220,12 @@ static int send_headers(int fd, int status, const char *content_type, const char
 /*
  * Sends a complete HTTP response on fd whose body is in memory: the
  * headers (see send_headers), then body if send_body is 1. Content-Length
- * is always body_len, even when send_body is 0.
+ * is always body_len, even when send_body is 0. keep_alive is passed into
+ * send_headers
  * Returns 0 on success, or -1 on failure.
 */
-static int send_response(int fd, int status, const char *content_type, const char *extra_headers, const char *body, size_t body_len, int send_body) {
-    if (send_headers(fd, status, content_type, extra_headers, (long long)body_len) == -1) {
+static int send_response(int fd, int status, const char *content_type, const char *extra_headers, const char *body, size_t body_len, int send_body, int keep_alive) {
+    if (send_headers(fd, status, content_type, extra_headers, (long long)body_len, keep_alive) == -1) {
         return -1;
     }
 
@@ -236,9 +239,10 @@ static int send_response(int fd, int status, const char *content_type, const cha
 /*
  * Sends an error response with a short plain-text body naming the status,
  * such as "405 Method Not Allowed\n". extra_headers follows the same rules
- * as in send_response. Returns 0 on success, or -1 on failure.
+ * as in send_response. keep_alive is passed into send_response.
+ * Returns 0 on success, or -1 on failure.
 */
-static int send_error(int fd, int status, const char *extra_headers) {
+static int send_error(int fd, int status, const char *extra_headers, int keep_alive) {
     char body[128];
 
     int body_len = snprintf(body, sizeof(body), "%d %s\n", status, http_reason_phrase(status));
@@ -248,7 +252,15 @@ static int send_error(int fd, int status, const char *extra_headers) {
         return -1;
     }
 
-    return send_response(fd, status, "text/plain; charset=utf-8", extra_headers, body, (size_t)body_len, 1);
+    return send_response(fd, status, "text/plain; charset=utf-8", extra_headers, body, (size_t)body_len, 1, keep_alive);
+}
+
+/*
+ * Returns 1 if req declares a body: Transfer-Encoding, or a non-zero
+ * Content-Length.
+ */
+static int request_has_body(const struct http_request *req) {
+    return req->has_transfer_encoding || (req->has_content_length && req->content_length > 0);
 }
 
 /*
@@ -282,7 +294,7 @@ static int decide_status(const struct http_request *req, const char **extra_head
         return 501;
     }
 
-    if (req->has_content_length && req->content_length > 0) {
+    if (request_has_body(req)) {
         return 413;
     }
 
@@ -440,24 +452,30 @@ static int open_file(const char *path, int *fd_out, off_t *size_out) {
  * the caller) and sends the response: an error, or the requested file.
  * Fills in *req and sets *parsed to 1 if the request parsed, and sets
  * *incomplete to 1 if a file's body could not be fully sent.
+ * Sets *keep_alive to 1 if the connection may stay open afterward: the
+ * request parsed, the client wants keep-alive, the request has no body,
+ * last is 0, and the response was sent completely. Otherwise sets it to 0.
  * Returns the status sent.
-*/
-static int respond(struct connection *conn, size_t header_len, const char *docroot, struct http_request *req, int *parsed, int *incomplete) {
+ */
+static int respond(struct connection *conn, size_t header_len, const char *docroot, int last, struct http_request *req, int *parsed, int *incomplete, int *keep_alive) {
+    *keep_alive = 0;
+    
     enum http_parse_result result = http_parse_request(conn->buf, header_len, req);
 
     if (result != HTTP_PARSE_OK) {
         int status = http_status_for_parse_result(result);
-        send_error(conn->fd, status, "");
+        send_error(conn->fd, status, "", 0);
         return status;
     }
 
     *parsed = 1;
+    *keep_alive = http_wants_keep_alive(req) && !request_has_body(req) && !last;
 
     const char *extra_headers = "";
     int status = decide_status(req, &extra_headers);
 
     if (status != 200) {
-        send_error(conn->fd, status, extra_headers);
+        send_error(conn->fd, status, extra_headers, *keep_alive);
         return status;
     }
 
@@ -465,7 +483,7 @@ static int respond(struct connection *conn, size_t header_len, const char *docro
     status = resolve_target(docroot, req->target, resolved);
 
     if (status != 200) {
-        send_error(conn->fd, status, "");
+        send_error(conn->fd, status, "", *keep_alive);
         return status;
     }
 
@@ -474,15 +492,16 @@ static int respond(struct connection *conn, size_t header_len, const char *docro
     status = open_file(resolved, &fd, &size);
 
     if (status != 200) {
-        send_error(conn->fd, status, "");
+        send_error(conn->fd, status, "", *keep_alive);
         return status;
     }
 
     const char *type = mime_type_for_path(resolved);
 
-    if (send_headers(conn->fd, status, type, "", (long long)size) == 0 && req->method == HTTP_METHOD_GET) {
+    if (send_headers(conn->fd, status, type, "", (long long)size, *keep_alive) == 0 && req->method == HTTP_METHOD_GET) {
         if (sendfile_all(conn->fd, fd, size) == -1) {
             *incomplete = 1;
+            *keep_alive = 0;
         }
     }
 
@@ -495,30 +514,37 @@ static int respond(struct connection *conn, size_t header_len, const char *docro
 * of conn->buf: responds to it, and logs one line. Temporarily writes a
 * '\0' after the header section for the parser, and restores the
 * original byte (the start of any pipelined request) before returning.
+* Returns 1 if the connection may stay open for another request, and
+* 0 if it must close.
 */
-static void handle_request(struct connection *conn, size_t header_len, const char *docroot) {
+static int handle_request(struct connection *conn, size_t header_len, const char *docroot, int last) {
     struct http_request req;
     int parsed = 0;
     int incomplete = 0;
+    int keep_alive = 0;
 
     char saved = conn->buf[header_len];
     conn->buf[header_len] = '\0';
 
-    int status = respond(conn, header_len, docroot, &req, &parsed, &incomplete);
+    int status = respond(conn, header_len, docroot, last, &req, &parsed, &incomplete, &keep_alive);
 
     log_request(conn->peer, parsed ? &req : NULL, status, incomplete);
 
     conn->buf[header_len] = saved;
+
+    return keep_alive;
 }
 
 /*
- * Handles one connection: reads requests from client_fd and responds to
+ * Keeps reading requests until the connection should close:
+ * reads requests from client_fd and responds to
  * each, logging one line per request. Bytes after a request's header
  * section are kept for the next request. peer is the client's address,
  * as "ip:port", used only for logging. Closes client_fd before returning.
  */
 static void handle_connection(int client_fd, const char *peer, const char *docroot) {
     struct connection conn;
+    int requests = 0;
     conn.fd = client_fd;
     conn.peer = peer;
     conn.len = 0;
@@ -534,11 +560,11 @@ static void handle_connection(int client_fd, const char *peer, const char *docro
             switch (rr) {
                 case READ_TOO_LARGE:
                     status = 431;
-                    send_error(conn.fd, status, "");
+                    send_error(conn.fd, status, "", 0);
                     break;
                 case READ_BAD:
                     status = 400;
-                    send_error(conn.fd, status, "");
+                    send_error(conn.fd, status, "", 0);
                     break;
                 case READ_CLOSED:
                 case READ_ERROR:
@@ -546,14 +572,21 @@ static void handle_connection(int client_fd, const char *peer, const char *docro
                     break;
             }
 
-            log_request(conn.peer, NULL, status, 0);
+            if (!(rr == READ_CLOSED && conn.len == 0 && requests > 0)) {
+                log_request(conn.peer, NULL, status, 0);
+            }
             break;
         }
 
-        handle_request(&conn, header_len, docroot);
+        requests++;
+        int last = (requests >= MAX_REQUESTS_PER_CONNECTION);
+
+        int keep_alive = handle_request(&conn, header_len, docroot, last);
         consume_request(&conn, header_len);
 
-        break;
+        if (!keep_alive) {
+            break;
+        }
     }
 
     close(conn.fd);
